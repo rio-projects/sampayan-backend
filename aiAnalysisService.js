@@ -1,17 +1,131 @@
 /**
  * AI Weather Analysis Engine - Sampayan Backend
  * 
- * Synthesizes forecast parameters, PAGASA intelligence, and current hardware state
- * into structured human-readable laundry safety recommendations.
+ * Leverages Google Gemini API (gemini-2.5-flash) to perform real-time intelligent
+ * weather synthesis and laundry safety risk assessment.
+ * Falls back to deterministic heuristic analysis if GEMINI_API_KEY is not set or network fails.
  */
 
+const { GoogleGenAI } = require('@google/genai');
 const pagasaService = require('./pagasaService');
 
 class AiAnalysisService {
+  constructor() {
+    this.cachedAnalysis = null;
+    this.lastAnalyzedTime = 0;
+    this.cacheTtlMs = 5 * 60 * 1000; // Cache Gemini results for 5 minutes
+  }
+
   /**
-   * Generates AI Weather & Laundry Safety Analysis
+   * Initializes GoogleGenAI client if GEMINI_API_KEY environment variable is present
    */
-  analyze(weatherData = {}, deviceState = {}) {
+  getAiClient() {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+    try {
+      return new GoogleGenAI({ apiKey });
+    } catch (err) {
+      console.warn('[GEMINI INIT ERR]', err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Analyzes weather forecast & PAGASA intelligence using Google Gemini API
+   */
+  async analyze(weatherData = {}, deviceState = {}) {
+    const now = Date.now();
+    // Return cached analysis if fresh
+    if (this.cachedAnalysis && (now - this.lastAnalyzedTime < this.cacheTtlMs)) {
+      return this.cachedAnalysis;
+    }
+
+    const aiClient = this.getAiClient();
+    if (aiClient) {
+      try {
+        const geminiResult = await this.analyzeWithGemini(aiClient, weatherData, deviceState);
+        if (geminiResult) {
+          this.cachedAnalysis = geminiResult;
+          this.lastAnalyzedTime = now;
+          return geminiResult;
+        }
+      } catch (err) {
+        console.error('[GEMINI API CALL ERR]', err.message);
+      }
+    }
+
+    // Fallback to deterministic heuristic engine
+    const fallbackResult = this.analyzeHeuristic(weatherData, deviceState);
+    this.cachedAnalysis = fallbackResult;
+    this.lastAnalyzedTime = now;
+    return fallbackResult;
+  }
+
+  /**
+   * Calls Google Gemini API (gemini-2.5-flash) with structured JSON schema output
+   */
+  async analyzeWithGemini(aiClient, weatherData, deviceState) {
+    const pagasa = pagasaService.getIntelligence();
+    const rainProb = weatherData.rainProbability || 0;
+    const lookaheadProb = weatherData.lookaheadRainProbability || rainProb;
+    const humidity = weatherData.humidity || 65;
+    const temp = weatherData.temperature || 28;
+    const isRaining = weatherData.isRaining || false;
+    const rainSensor = deviceState.rainSensor || false;
+    const position = deviceState.clotheslinePosition || 'open';
+
+    const prompt = `
+You are Sampayan AI, an expert Philippine weather intelligence and smart clothesline safety system.
+Analyze the following real-time atmospheric and hardware telemetry to produce a structured JSON laundry safety risk assessment.
+
+CURRENT TELEMETRY:
+- Current Temperature: ${temp}°C
+- Current Humidity: ${humidity}%
+- Immediate Rain Probability: ${rainProb}%
+- Peak Rain Risk (Next Lookahead Window): ${lookaheadProb}%
+- Local Rain Sensor Triggered: ${rainSensor ? 'YES' : 'NO'}
+- Active Weather Condition: ${weatherData.condition || 'Clear'}
+- Current Raining State: ${isRaining ? 'YES' : 'NO'}
+- PAGASA Primary Weather System: ${pagasa.primarySystem} (${pagasa.systemName})
+- PAGASA Status: ${pagasa.status}
+- PAGASA Pattern: ${pagasa.patternDescription}
+- Clothesline Current Position: ${position.toUpperCase()}
+
+Return ONLY a valid JSON object matching the exact JSON structure:
+{
+  "aiRiskLevel": "LOW" | "MODERATE" | "HIGH" | "CRITICAL",
+  "laundryRecommendation": "SAFE_OUTSIDE" | "MONITOR" | "RETRACT_SOON" | "RETRACT_IMMEDIATELY" | "KEEP_RETRACTED",
+  "weatherCause": "Short summary of primary weather cause (e.g. Southwest Monsoon Habagat)",
+  "expectedPattern": "Human readable weather forecast pattern (e.g. Intermittent heavy rain showers expected)",
+  "laundryImpact": "Impact on laundry outdoor drying (e.g. High risk of laundry getting soaked)",
+  "recommendedAction": "Action string (e.g. Keep clothesline retracted under cover)"
+}
+`;
+
+    const response = await aiClient.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    if (response && response.text) {
+      const parsed = JSON.parse(response.text.trim());
+      console.log(`[GEMINI API SUCCESS] 🤖 Risk: ${parsed.aiRiskLevel} | Recommendation: ${parsed.laundryRecommendation}`);
+      return {
+        ...parsed,
+        source: 'Google Gemini 2.5 Flash',
+        evaluatedAt: new Date().toISOString(),
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Fallback heuristic rule engine if GEMINI_API_KEY is not set
+   */
+  analyzeHeuristic(weatherData = {}, deviceState = {}) {
     const rainProb = weatherData.rainProbability || 0;
     const lookaheadProb = weatherData.lookaheadRainProbability || rainProb;
     const humidity = weatherData.humidity || 65;
@@ -63,6 +177,7 @@ class AiAnalysisService {
       expectedPattern: pattern,
       laundryImpact: impact,
       recommendedAction: action,
+      source: 'Deterministic Heuristic Fallback',
       evaluatedAt: new Date().toISOString(),
     };
   }
