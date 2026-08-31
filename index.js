@@ -43,9 +43,24 @@ app.get('/api/status', (req, res) => {
   res.json(deviceManager.getSnapshot());
 });
 
+// Location Sync Endpoint
+app.post('/api/location', async (req, res) => {
+  const { latitude, longitude, locationName } = req.body;
+  if (!latitude || !longitude) {
+    return res.status(400).json({ error: 'Missing required fields: latitude and longitude' });
+  }
+
+  const result = await deviceManager.updateLocation(latitude, longitude, locationName);
+  res.json(result);
+});
+
 // Weather Snapshot Endpoint
 app.get('/api/weather', async (req, res) => {
-  const forecast = await weatherService.fetchWeather();
+  const { lat, lon, name } = req.query;
+  if (lat && lon) {
+    await deviceManager.updateLocation(lat, lon, name);
+  }
+  const forecast = weatherService.getSnapshot();
   res.json(forecast);
 });
 
@@ -56,6 +71,10 @@ app.get('/api/pagasa', (req, res) => {
 
 // AI Weather Risk Analysis Endpoint
 app.get('/api/ai-analysis', async (req, res) => {
+  const { lat, lon, name } = req.query;
+  if (lat && lon) {
+    await deviceManager.updateLocation(lat, lon, name);
+  }
   const snapshot = deviceManager.getSnapshot();
   const analysis = await aiAnalysisService.analyze(snapshot.weatherForecast, snapshot);
   res.json(analysis);

@@ -68,6 +68,14 @@ class DeviceManager {
       lastSeen: null,
       ip: null,
 
+      // User Location Coordinates & Name
+      location: {
+        name: 'Manila, Philippines',
+        latitude: 14.5995,
+        longitude: 120.9842,
+        updatedAt: null,
+      },
+
       // Weather Forecast Snapshot & Lookahead
       weatherForecast: {
         rainProbability: 0,
@@ -76,6 +84,9 @@ class DeviceManager {
         condition: 'Clear Sky',
         temperature: 28,
         humidity: 75,
+        latitude: 14.5995,
+        longitude: 120.9842,
+        locationName: 'Manila, Philippines',
         lastUpdated: null,
       },
 
@@ -84,6 +95,11 @@ class DeviceManager {
       aiAnalysis: {
         aiRiskLevel: 'LOW',
         laundryRecommendation: 'SAFE_OUTSIDE',
+        locationContext: 'Manila, Philippines (14.60°N, 120.98°E)',
+        overviewParagraph: 'System initialized. Awaiting live telemetry and location-based AI synthesis.',
+        hazardBreakdownParagraph: 'Awaiting initial forecast evaluation.',
+        dryingOutlookParagraph: 'Awaiting humidity and moisture analysis.',
+        actionPlanParagraph: 'Clothesline is operational under system monitoring.',
         weatherCause: 'Clear Weather',
         expectedPattern: 'Safe dry conditions.',
         laundryImpact: 'Optimal drying.',
@@ -111,6 +127,49 @@ class DeviceManager {
 
     // Start Weather Polling & Automated Decision Engine
     this.initWeatherEngine();
+  }
+
+  /**
+   * Updates user GPS location and triggers real-time location-based weather & AI re-evaluation
+   */
+  async updateLocation(lat, lon, locationName = null) {
+    if (!lat || !lon || isNaN(Number(lat)) || isNaN(Number(lon))) {
+      return { success: false, error: 'Invalid latitude or longitude' };
+    }
+
+    const latitude = Number(lat);
+    const longitude = Number(lon);
+    const name = locationName || `${latitude.toFixed(2)}°N, ${longitude.toFixed(2)}°E`;
+
+    this.deviceState.location = {
+      name,
+      latitude,
+      longitude,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.addActivityLog('Location Updated', `User location set to ${name}`, 'system');
+
+    // Fetch location-based weather immediately
+    const forecast = await weatherService.fetchWeather(latitude, longitude, name);
+    this.updateWeatherForecastState(forecast);
+
+    // Refresh PAGASA & AI Analysis for new location
+    await pagasaService.pollPagasaData(forecast);
+    this.deviceState.pagasaIntelligence = pagasaService.getIntelligence();
+    this.deviceState.aiAnalysis = this.deviceState.settings.aiAnalysisEnabled
+      ? await aiAnalysisService.analyze(this.deviceState.weatherForecast, this.deviceState)
+      : aiAnalysisService.analyzeHeuristic(this.deviceState.weatherForecast, this.deviceState);
+
+    this.evaluateAutomatedRules('location_update');
+    this.broadcastStateToClients();
+
+    return {
+      success: true,
+      location: this.deviceState.location,
+      weather: this.deviceState.weatherForecast,
+      aiAnalysis: this.deviceState.aiAnalysis,
+    };
   }
 
   /**

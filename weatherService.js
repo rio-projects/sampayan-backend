@@ -3,11 +3,14 @@
  * Fetches real-time weather forecasts and N-hour rain probabilities without requiring an API key.
  */
 
-const LATITUDE = process.env.WEATHER_LAT || '14.5995';   // Default: Manila, Philippines
-const LONGITUDE = process.env.WEATHER_LON || '120.9842';
+let DEFAULT_LATITUDE = process.env.WEATHER_LAT || '14.5995';   // Default: Manila, Philippines
+let DEFAULT_LONGITUDE = process.env.WEATHER_LON || '120.9842';
 
 class WeatherService {
   constructor() {
+    this.latitude = DEFAULT_LATITUDE;
+    this.longitude = DEFAULT_LONGITUDE;
+    this.locationName = 'Manila, Philippines';
     this.forecast = {
       rainProbability: 0,
       hourlyProbabilities: [0],
@@ -17,11 +20,29 @@ class WeatherService {
       humidity: 75,
       condition: 'Clear Sky',
       weatherCode: 0,
+      latitude: Number(this.latitude),
+      longitude: Number(this.longitude),
+      locationName: this.locationName,
       lastUpdated: null,
       error: null,
     };
 
     this.pollInterval = null;
+  }
+
+  /**
+   * Sets current active location coordinates and optional place name
+   */
+  setLocation(lat, lon, locationName = null) {
+    if (lat !== undefined && lat !== null && !isNaN(Number(lat))) {
+      this.latitude = String(lat);
+    }
+    if (lon !== undefined && lon !== null && !isNaN(Number(lon))) {
+      this.longitude = String(lon);
+    }
+    if (locationName) {
+      this.locationName = locationName;
+    }
   }
 
   /**
@@ -41,8 +62,14 @@ class WeatherService {
   /**
    * Fetches latest weather data from Open-Meteo API (12-hour hourly forecast)
    */
-  async fetchWeather() {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${LATITUDE}&longitude=${LONGITUDE}&current=temperature_2m,relative_humidity_2m,precipitation,rain,weather_code&hourly=precipitation_probability&forecast_hours=12`;
+  async fetchWeather(customLat = null, customLon = null, customName = null) {
+    if (customLat && customLon) {
+      this.setLocation(customLat, customLon, customName);
+    }
+
+    const lat = this.latitude;
+    const lon = this.longitude;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,precipitation,rain,weather_code&hourly=precipitation_probability&forecast_hours=12`;
 
     try {
       const controller = new AbortController();
@@ -73,6 +100,9 @@ class WeatherService {
         humidity: current.relative_humidity_2m || 75,
         condition: this.getWeatherConditionText(current.weather_code || 0),
         weatherCode: current.weather_code || 0,
+        latitude: Number(lat),
+        longitude: Number(lon),
+        locationName: this.locationName,
         lastUpdated: new Date().toISOString(),
         error: null,
       };
