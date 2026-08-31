@@ -29,7 +29,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
     server: 'Automated Smart Clothesline Backend',
-    version: '2.1.0',
+    version: '2.2.0',
     uptime: Math.floor(process.uptime()),
     device: deviceManager.getSnapshot(),
   });
@@ -48,8 +48,8 @@ app.get('/api/weather', async (req, res) => {
 
 // Settings Configuration Endpoint
 app.post('/api/settings', (req, res) => {
-  const { motorSpeed, lookaheadHours, rainThreshold } = req.body;
-  const updatedSettings = deviceManager.updateSettings({ motorSpeed, lookaheadHours, rainThreshold });
+  const { motorSpeed, lookaheadHours, rainThreshold, autoClose, autoReopen } = req.body;
+  const updatedSettings = deviceManager.updateSettings({ motorSpeed, lookaheadHours, rainThreshold, autoClose, autoReopen });
   res.json({
     success: true,
     settings: updatedSettings,
@@ -154,8 +154,6 @@ wssClient.on('connection', (ws, req) => {
 // Handle HTTP Upgrade requests to route WebSocket paths safely
 server.on('upgrade', (request, socket, head) => {
   const urlPath = request.url || '';
-  const time = new Date().toLocaleTimeString();
-  console.log(`[${time}] 🔌 [WS UPGRADE REQUEST] Path: ${urlPath}`);
 
   if (urlPath.includes('device')) {
     wssDevice.handleUpgrade(request, socket, head, (ws) => {

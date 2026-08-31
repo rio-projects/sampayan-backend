@@ -1,6 +1,6 @@
 /**
  * Automated Smart Clothesline Device & System Manager
- * Manages real-time state, weather automation, operating modes, settings, and WebSocket connections.
+ * Manages real-time state, weather automation, operating modes, settings, activity timeline, and WebSocket connections.
  */
 
 const weatherService = require('./weatherService');
@@ -21,13 +21,15 @@ class DeviceManager {
       
       // Control Modes & Safety Overrides
       systemMode: 'auto',         // 'auto' | 'manual'
-      rainSafetyOverride: true,   // true | false
+      rainSafetyOverride: true,   // true | false (User facing: Rain Protection)
 
       // Settings Configuration
       settings: {
         motorSpeed: 255,          // 0 to 255 PWM
         lookaheadHours: 3,        // Lookahead window N hours (1 to 12)
         rainThreshold: 10,        // Rain probability threshold % (e.g., 10%)
+        autoClose: true,          // Auto-close when rain risk detected (ON by default)
+        autoReopen: false,        // Auto-reopen when dry (OFF by default)
       },
       
       // Sensor & Hardware Telemetry
@@ -47,14 +49,38 @@ class DeviceManager {
         humidity: 75,
         lastUpdated: null,
       },
+
+      // Activity Timeline (User readable logs)
+      activityLogs: [],
     };
 
     // Active WebSocket connections
     this.deviceSocket = null;
     this.clientSockets = new Set();
 
+    // Add initial system startup activity log
+    this.addActivityLog('System Initialized', 'Smart Clothesline backend operational', 'system');
+
     // Start Weather Polling & Automated Decision Engine
     this.initWeatherEngine();
+  }
+
+  /**
+   * Adds an event entry to the user-friendly Activity Timeline
+   */
+  addActivityLog(title, description, type = 'system') {
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const logItem = {
+      id: Date.now().toString(),
+      timestamp: timeStr,
+      rawTime: new Date().toISOString(),
+      title,
+      description,
+      type, // 'safe' | 'rain_risk' | 'rain_sensor' | 'manual' | 'system'
+    };
+
+    // Keep last 20 activity logs
+    this.deviceState.activityLogs = [logItem, ...this.deviceState.activityLogs.slice(0, 19)];
   }
 
   /**
@@ -85,9 +111,8 @@ class DeviceManager {
    * Evaluates control priority rules for Smart Clothesline Automation:
    * 1. Rain Safety Override (If ON & Rain Detected -> Force CLOSE even in Manual Mode)
    * 2. Automatic Mode Rules:
-   *    - Retract / Close if rain detected OR rain probability >= rainThreshold within next N hours
-   *    - Open if dry weather AND rain probability < rainThreshold for next N hours
-   * 3. Manual Mode Rules (Respect manual user commands)
+   *    - Retract / Close if autoClose=true AND (rain detected OR rain probability >= rainThreshold in next N hours)
+   *    - Open if autoReopen=true AND dry weather AND rain probability < rainThreshold for next N hours
    */
   evaluateAutomatedRules(triggerReason = 'periodic') {
     const { systemMode, rainSafetyOverride, weatherForecast, rainSensor, clotheslinePosition, settings } = this.deviceState;
@@ -99,13 +124,12 @@ class DeviceManager {
     const isRainDetected = rainSensor || weatherForecast.isRaining;
     const isRainRiskInNextNHours = lookaheadRainProb >= settings.rainThreshold;
 
-    const time = new Date().toLocaleTimeString();
-
     // Rule 1: Rain Safety Override (Active during Manual Mode if enabled)
     if (systemMode === 'manual' && rainSafetyOverride && (isRainDetected || isRainRiskInNextNHours)) {
       if (clotheslinePosition !== 'closed') {
-        console.log(`[${time}] 🌧️ [RAIN OVERRIDE] Rain risk (${lookaheadRainProb}% in next ${settings.lookaheadHours}h)! Auto-retracting clothesline...`);
-        this.executeClotheslineAction('close', `Rain Safety Override (${lookaheadRainProb}% rain in ${settings.lookaheadHours}h)`);
+        const desc = isRainDetected ? 'Physical rain sensor triggered' : `${lookaheadRainProb}% rain expected in next ${settings.lookaheadHours}h`;
+        this.addActivityLog('Rain Protection Triggered', desc, 'rain_sensor');
+        this.executeClotheslineAction('close', `Rain Protection (${desc})`);
       }
       return;
     }
@@ -113,14 +137,17 @@ class DeviceManager {
     // Rule 2: Automatic Mode Decision Engine
     if (systemMode === 'auto') {
       if (isRainDetected || isRainRiskInNextNHours) {
-        if (clotheslinePosition !== 'closed') {
-          console.log(`[${time}] 🌧️ [AUTO MODE] Rain risk detected (${lookaheadRainProb}% in next ${settings.lookaheadHours}h, threshold: ${settings.rainThreshold}%). Retracting clothesline...`);
-          this.executeClotheslineAction('close', `Auto Protection (${lookaheadRainProb}% rain next ${settings.lookaheadHours}h)`);
+        if (settings.autoClose && clotheslinePosition !== 'closed') {
+          const desc = isRainDetected ? 'Rain detected by local sensor' : `${lookaheadRainProb}% rain probability within ${settings.lookaheadHours} hours`;
+          this.addActivityLog('Clothesline Closed Automatically', desc, 'rain_risk');
+          this.executeClotheslineAction('close', `Auto Protection (${desc})`);
         }
       } else {
-        if (clotheslinePosition !== 'open') {
-          console.log(`[${time}] ☀️ [AUTO MODE] Weather safe (<${settings.rainThreshold}% rain for next ${settings.lookaheadHours}h). Opening clothesline...`);
-          this.executeClotheslineAction('open', `Auto Safe (<${settings.rainThreshold}% rain next ${settings.lookaheadHours}h)`);
+        // Safe conditions
+        if (settings.autoReopen && clotheslinePosition !== 'open') {
+          const desc = `<${settings.rainThreshold}% rain expected for next ${settings.lookaheadHours} hours`;
+          this.addActivityLog('Clothesline Opened Automatically', desc, 'safe');
+          this.executeClotheslineAction('open', `Auto Reopen (${desc})`);
         }
       }
     }
@@ -129,7 +156,7 @@ class DeviceManager {
   /**
    * Updates Settings Configuration
    */
-  updateSettings({ motorSpeed, lookaheadHours, rainThreshold }) {
+  updateSettings({ motorSpeed, lookaheadHours, rainThreshold, autoClose, autoReopen }) {
     if (motorSpeed !== undefined) {
       this.deviceState.settings.motorSpeed = Math.max(0, Math.min(255, Number(motorSpeed)));
       this.deviceState.speed = this.deviceState.settings.motorSpeed;
@@ -143,8 +170,15 @@ class DeviceManager {
       this.deviceState.settings.rainThreshold = Math.max(0, Math.min(100, Number(rainThreshold)));
     }
 
-    const time = new Date().toLocaleTimeString();
-    console.log(`[${time}] ⚙️  [SETTINGS UPDATED] Speed: ${this.deviceState.settings.motorSpeed} | Lookahead: ${this.deviceState.settings.lookaheadHours}h | Threshold: ${this.deviceState.settings.rainThreshold}%`);
+    if (autoClose !== undefined) {
+      this.deviceState.settings.autoClose = Boolean(autoClose);
+    }
+
+    if (autoReopen !== undefined) {
+      this.deviceState.settings.autoReopen = Boolean(autoReopen);
+    }
+
+    this.addActivityLog('Settings Updated', `Speed: ${Math.round((this.deviceState.settings.motorSpeed/255)*100)}% | Window: ${this.deviceState.settings.lookaheadHours}h | Threshold: ${this.deviceState.settings.rainThreshold}%`, 'system');
 
     // Re-evaluate rules immediately with new settings
     this.evaluateAutomatedRules('settings_update');
@@ -159,8 +193,7 @@ class DeviceManager {
     if (mode !== 'auto' && mode !== 'manual') return false;
     
     this.deviceState.systemMode = mode;
-    const time = new Date().toLocaleTimeString();
-    console.log(`[${time}] ⚙️  [MODE CHANGED] System Mode set to: ${mode.toUpperCase()}`);
+    this.addActivityLog('System Mode Changed', `Switched to ${mode.toUpperCase()} Mode`, 'manual');
 
     // Re-evaluate rules immediately if switched to auto
     if (mode === 'auto') {
@@ -176,8 +209,7 @@ class DeviceManager {
    */
   setRainSafetyOverride(enabled) {
     this.deviceState.rainSafetyOverride = Boolean(enabled);
-    const time = new Date().toLocaleTimeString();
-    console.log(`[${time}] 🛡️ [OVERRIDE CHANGED] Rain Safety Override: ${enabled ? 'ENABLED' : 'DISABLED'}`);
+    this.addActivityLog('Rain Protection Configured', `Physical Rain Protection set to ${enabled ? 'ENABLED' : 'DISABLED'}`, 'system');
 
     this.evaluateAutomatedRules('override_switch');
     this.broadcastStateToClients();
@@ -200,25 +232,25 @@ class DeviceManager {
       speed = targetSpeed;
       newPos = 'open';
       newMotorStatus = 'extending';
+      this.addActivityLog('Clothesline Opened', reason, 'manual');
     } else if (action === 'close') {
       dir = 'cc';
       speed = targetSpeed;
       newPos = 'closed';
       newMotorStatus = 'retracting';
+      this.addActivityLog('Clothesline Closed', reason, 'manual');
     } else if (action === 'stop') {
       dir = 'stop';
       speed = 0;
       newPos = 'partial';
       newMotorStatus = 'stopped';
+      this.addActivityLog('Motor Stopped', reason, 'manual');
     }
 
     this.deviceState.direction = dir;
     this.deviceState.speed = speed;
     this.deviceState.clotheslinePosition = newPos;
     this.deviceState.motorStatus = newMotorStatus;
-
-    const time = new Date().toLocaleTimeString();
-    console.log(`[${time}] 👕 [CLOTHESLINE ACTION] ${action.toUpperCase()} (${reason}) --> Dir: ${dir} | Speed: ${speed}`);
 
     const payload = {
       action: 'motor',
@@ -248,9 +280,7 @@ class DeviceManager {
    */
   sendBuzzerCommand(state) {
     this.deviceState.buzzer = Boolean(state);
-
-    const time = new Date().toLocaleTimeString();
-    console.log(`[${time}] 🔔 [ACTION: BUZZER] State: ${state ? 'ON' : 'OFF'}`);
+    this.addActivityLog('Warning Buzzer Toggled', `Buzzer turned ${state ? 'ON' : 'OFF'}`, 'manual');
 
     const payload = {
       action: 'buzzer',
@@ -267,8 +297,7 @@ class DeviceManager {
    */
   setDeviceSocket(ws, req) {
     const clientIp = req.socket.remoteAddress;
-    const time = new Date().toLocaleTimeString();
-    console.log(`[${time}] ⚡ [HARDWARE CONNECTED] ESP32 device online from ${clientIp}`);
+    this.addActivityLog('ESP32 Hardware Connected', `Connected from ${clientIp}`, 'system');
 
     this.deviceSocket = ws;
     this.deviceState.connected = true;
@@ -282,8 +311,7 @@ class DeviceManager {
     });
 
     ws.on('close', () => {
-      const dropTime = new Date().toLocaleTimeString();
-      console.log(`[${dropTime}] ⚠️  [HARDWARE DISCONNECTED] ESP32 device offline`);
+      this.addActivityLog('ESP32 Hardware Disconnected', 'Connection lost', 'system');
       this.deviceSocket = null;
       this.deviceState.connected = false;
       this.broadcastStateToClients();
@@ -311,14 +339,13 @@ class DeviceManager {
         if (payload.rainSensor !== undefined) {
           const prevRain = this.deviceState.rainSensor;
           this.deviceState.rainSensor = Boolean(payload.rainSensor);
-          if (prevRain !== this.deviceState.rainSensor) {
+          if (prevRain !== this.deviceState.rainSensor && this.deviceState.rainSensor) {
+            this.addActivityLog('Rain Detected by Sensor', 'Hardware sensor detected rainfall', 'rain_sensor');
             this.evaluateAutomatedRules('rain_sensor_change');
           }
         }
 
         this.broadcastStateToClients();
-      } else if (payload.type === 'ack') {
-        console.log('[DEVICE ACK]', payload);
       }
     } catch (err) {
       console.error('[DEVICE MSG PARSE ERR]', err.message);
@@ -329,22 +356,11 @@ class DeviceManager {
    * Register Web/Mobile Client App WebSocket connection
    */
   addClientSocket(ws, req) {
-    const time = new Date().toLocaleTimeString();
-    const clientIp = req ? req.socket.remoteAddress : 'unknown';
-    console.log(`[${time}] 📱 [CLIENT CONNECTED] App subscriber connected (${clientIp})`);
     this.clientSockets.add(ws);
-
-    // Send immediate initial state
     ws.send(JSON.stringify({ type: 'state_update', data: this.deviceState }));
 
     ws.on('close', () => {
-      const closeTime = new Date().toLocaleTimeString();
-      console.log(`[${closeTime}] 📱 [CLIENT DISCONNECTED] App subscriber disconnected`);
       this.clientSockets.delete(ws);
-    });
-
-    ws.on('error', (err) => {
-      console.error('[CLIENT ERR]', err.message);
     });
   }
 
@@ -356,7 +372,6 @@ class DeviceManager {
       this.deviceSocket.send(JSON.stringify(payload));
       return true;
     }
-    console.warn('   └─ ⚠️  [HARDWARE OFFLINE] Command saved to backend buffer');
     return false;
   }
 
