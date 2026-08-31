@@ -216,13 +216,8 @@ class MotorControlManager {
         this.motorDirection = 'NONE';
 
         if (this.deviceStateRef) {
-          this.deviceStateRef.buzzer = false;
           if (action === 'OPEN') this.deviceStateRef.clotheslinePosition = 'open';
           if (action === 'CLOSE') this.deviceStateRef.clotheslinePosition = 'closed';
-        }
-
-        if (this.sendToDeviceCallback) {
-          this.sendToDeviceCallback({ action: 'buzzer', state: false });
         }
 
         this.notifyStateChange();
@@ -239,8 +234,14 @@ class MotorControlManager {
       speed: 0,
     };
 
+    if (this.deviceStateRef) {
+      this.deviceStateRef.speed = 0;
+      this.deviceStateRef.buzzer = false;
+    }
+
     if (this.sendToDeviceCallback) {
       this.sendToDeviceCallback(stopPayload);
+      this.sendToDeviceCallback({ action: 'buzzer', state: false });
     }
   }
 
