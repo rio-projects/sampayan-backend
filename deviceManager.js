@@ -26,6 +26,7 @@ class DeviceManager {
       // Settings Configuration
       settings: {
         motorSpeed: 255,          // 0 to 255 PWM
+        travelDurationSeconds: 10,// Motor travel duration in seconds (3 to 60s)
         lookaheadHours: 3,        // Lookahead window N hours (1 to 12)
         rainThreshold: 10,        // Rain probability threshold % (e.g., 10%)
         autoClose: true,          // Auto-close when rain risk detected (ON by default)
@@ -156,10 +157,14 @@ class DeviceManager {
   /**
    * Updates Settings Configuration
    */
-  updateSettings({ motorSpeed, lookaheadHours, rainThreshold, autoClose, autoReopen }) {
+  updateSettings({ motorSpeed, travelDurationSeconds, lookaheadHours, rainThreshold, autoClose, autoReopen }) {
     if (motorSpeed !== undefined) {
       this.deviceState.settings.motorSpeed = Math.max(0, Math.min(255, Number(motorSpeed)));
       this.deviceState.speed = this.deviceState.settings.motorSpeed;
+    }
+
+    if (travelDurationSeconds !== undefined) {
+      this.deviceState.settings.travelDurationSeconds = Math.max(3, Math.min(60, Number(travelDurationSeconds)));
     }
 
     if (lookaheadHours !== undefined) {
@@ -178,7 +183,7 @@ class DeviceManager {
       this.deviceState.settings.autoReopen = Boolean(autoReopen);
     }
 
-    this.addActivityLog('Settings Updated', `Speed: ${Math.round((this.deviceState.settings.motorSpeed/255)*100)}% | Window: ${this.deviceState.settings.lookaheadHours}h | Threshold: ${this.deviceState.settings.rainThreshold}%`, 'system');
+    this.addActivityLog('Settings Updated', `Speed: ${Math.round((this.deviceState.settings.motorSpeed/255)*100)}% | Travel: ${this.deviceState.settings.travelDurationSeconds}s | Window: ${this.deviceState.settings.lookaheadHours}h`, 'system');
 
     // Re-evaluate rules immediately with new settings
     this.evaluateAutomatedRules('settings_update');
@@ -274,7 +279,8 @@ class DeviceManager {
       this.motorTimer = null;
     }
 
-    // Automatically transition motorStatus to 'idle' and turn off buzzer after 10 seconds of movement
+    // Automatically transition motorStatus to 'idle' and turn off buzzer after configured travel duration
+    const travelMs = (this.deviceState.settings.travelDurationSeconds || 10) * 1000;
     if (action === 'open' || action === 'close') {
       this.motorTimer = setTimeout(() => {
         this.deviceState.motorStatus = 'idle';
@@ -283,7 +289,7 @@ class DeviceManager {
         this.sendToDevice({ action: 'motor', dir: 'stop', speed: 0 });
         this.sendToDevice({ action: 'buzzer', state: false });
         this.broadcastStateToClients();
-      }, 10000); // 10-second calibrated travel time
+      }, travelMs);
     }
 
     const payload = {

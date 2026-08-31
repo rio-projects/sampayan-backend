@@ -48,8 +48,8 @@ app.get('/api/weather', async (req, res) => {
 
 // Settings Configuration Endpoint
 app.post('/api/settings', (req, res) => {
-  const { motorSpeed, lookaheadHours, rainThreshold, autoClose, autoReopen } = req.body;
-  const updatedSettings = deviceManager.updateSettings({ motorSpeed, lookaheadHours, rainThreshold, autoClose, autoReopen });
+  const { motorSpeed, travelDurationSeconds, lookaheadHours, rainThreshold, autoClose, autoReopen } = req.body;
+  const updatedSettings = deviceManager.updateSettings({ motorSpeed, travelDurationSeconds, lookaheadHours, rainThreshold, autoClose, autoReopen });
   res.json({
     success: true,
     settings: updatedSettings,
