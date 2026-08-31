@@ -180,15 +180,10 @@ class MotorControlManager {
 
     // 4. Execute CLOCKWISE or COUNTER_CLOCKWISE
     const commandPayload = {
-        command: 'MOTOR_MOVE',
-        direction: direction,
-        action: action, // Legacy support
-        dir: direction === 'CLOCKWISE' ? 'c' : 'cc', // Legacy ESP compatibility
-        speed: speed,
-        duration: duration,
-        source: source,
-        reason: reason,
-      };
+      action: 'motor',
+      dir: direction === 'CLOCKWISE' ? 'c' : 'cc',
+      speed: speed,
+    };
 
       this.motorState = direction;
       this.motorDirection = direction;
@@ -239,13 +234,9 @@ class MotorControlManager {
    */
   async sendStopToHardware(source, reason) {
     const stopPayload = {
-      command: 'MOTOR_STOP',
-      direction: 'STOP',
-      action: 'stop',
+      action: 'motor',
       dir: 'stop',
       speed: 0,
-      source: source,
-      reason: reason,
     };
 
     if (this.sendToDeviceCallback) {
