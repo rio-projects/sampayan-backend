@@ -112,7 +112,7 @@ class MotorControlManager {
       direction: dir,
       action: action || (dir === 'CLOCKWISE' ? 'OPEN' : dir === 'COUNTER_CLOCKWISE' ? 'CLOSE' : 'STOP'),
       speed: speed !== undefined && speed !== null ? Number(speed) : (this.deviceStateRef?.settings?.motorSpeed || 255),
-      duration: duration !== undefined && duration !== null ? Number(duration) : 1.8,
+      duration: duration !== undefined && duration !== null ? Number(duration) : 5.0,
       source: source || 'MANUAL',
       reason: reason || 'User Command',
       timestamp: Date.now(),

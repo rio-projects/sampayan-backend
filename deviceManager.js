@@ -37,8 +37,8 @@ class DeviceManager {
       // Settings Configuration
       settings: {
         motorSpeed: 255,             // 0 to 255 PWM (displayed as 25% - 100%)
-        openDurationSeconds: 1.8,    // Decimal 0.1s to 5.0s
-        closeDurationSeconds: 2.1,   // Decimal 0.1s to 5.0s
+        openDurationSeconds: 5.0,    // Decimal 0.1s to 5.0s
+        closeDurationSeconds: 5.0,   // Decimal 0.1s to 5.0s
         travelDurationSeconds: 10,   // Fallback motor travel duration in seconds
         directionMapping: 'NORMAL',  // 'NORMAL' (CW=Open, CCW=Close) | 'REVERSED' (CW=Close, CCW=Open)
         lookaheadHours: 3,           // Lookahead window N hours (1 to 12)
@@ -354,11 +354,11 @@ class DeviceManager {
       ? Math.max(25, Math.min(255, requestedSpeed))
       : this.deviceState.settings.motorSpeed;
 
-    let durationSeconds = 1.8;
+    let durationSeconds = 5.0;
     if (actUpper === 'OPEN') {
-      durationSeconds = this.deviceState.settings.openDurationSeconds || 1.8;
+      durationSeconds = this.deviceState.settings.openDurationSeconds || 5.0;
     } else if (actUpper === 'CLOSE') {
-      durationSeconds = this.deviceState.settings.closeDurationSeconds || 2.1;
+      durationSeconds = this.deviceState.settings.closeDurationSeconds || 5.0;
     }
 
     const result = motorControlManager.requestMotorCommand({
@@ -400,8 +400,8 @@ class DeviceManager {
         ? Math.max(25, Math.min(255, requestedSpeed))
         : this.deviceState.settings.motorSpeed;
 
-    let durationSeconds = 1.8;
-    if (dir === 'COUNTER_CLOCKWISE') durationSeconds = this.deviceState.settings.closeDurationSeconds || 2.1;
+    let durationSeconds = 5.0;
+    if (dir === 'COUNTER_CLOCKWISE') durationSeconds = this.deviceState.settings.closeDurationSeconds || 5.0;
 
     const result = motorControlManager.requestMotorCommand({
       targetDirection: dir,
