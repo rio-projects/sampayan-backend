@@ -5,6 +5,9 @@ const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const deviceManager = require('./deviceManager');
 const weatherService = require('./weatherService');
+const pagasaService = require('./pagasaService');
+const aiAnalysisService = require('./aiAnalysisService');
+const notificationService = require('./notificationService');
 
 const PORT = process.env.PORT || 4000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -29,7 +32,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
     server: 'Automated Smart Clothesline Backend',
-    version: '2.2.0',
+    version: '3.0.0',
     uptime: Math.floor(process.uptime()),
     device: deviceManager.getSnapshot(),
   });
@@ -46,10 +49,28 @@ app.get('/api/weather', async (req, res) => {
   res.json(forecast);
 });
 
+// PAGASA Weather Intelligence Endpoint
+app.get('/api/pagasa', (req, res) => {
+  res.json(pagasaService.getIntelligence());
+});
+
+// AI Weather Risk Analysis Endpoint
+app.get('/api/ai-analysis', (req, res) => {
+  const snapshot = deviceManager.getSnapshot();
+  const analysis = aiAnalysisService.analyze(snapshot.weatherForecast, snapshot);
+  res.json(analysis);
+});
+
+// Push Notification Registration Endpoint
+app.post('/api/notifications/register', (req, res) => {
+  const { token } = req.body;
+  const registered = notificationService.registerToken(token);
+  res.json({ success: registered, token });
+});
+
 // Settings Configuration Endpoint
 app.post('/api/settings', (req, res) => {
-  const { motorSpeed, travelDurationSeconds, lookaheadHours, rainThreshold, autoClose, autoReopen } = req.body;
-  const updatedSettings = deviceManager.updateSettings({ motorSpeed, travelDurationSeconds, lookaheadHours, rainThreshold, autoClose, autoReopen });
+  const updatedSettings = deviceManager.updateSettings(req.body);
   res.json({
     success: true,
     settings: updatedSettings,
@@ -89,16 +110,16 @@ app.post('/api/override', (req, res) => {
 
 // Clothesline Control Endpoint (OPEN / CLOSE / STOP)
 app.post('/api/clothesline', (req, res) => {
-  const { action, speed } = req.body;
+  const { action, speed, force } = req.body;
   if (!action || (action !== 'open' && action !== 'close' && action !== 'stop')) {
     return res.status(400).json({ error: 'Invalid or missing field "action". Must be "open", "close", or "stop".' });
   }
 
-  const result = deviceManager.executeClotheslineAction(action, 'Manual API Command', speed);
+  const result = deviceManager.executeClotheslineAction(action, 'Manual API Command', speed, force);
   res.json({
     success: result.success,
     action,
-    message: result.success ? `Clothesline ${action.toUpperCase()} command sent` : `Clothesline ${action.toUpperCase()} command queued (ESP32 offline)`,
+    message: result.message || (result.success ? `Clothesline ${action.toUpperCase()} command sent` : `Clothesline ${action.toUpperCase()} command queued (ESP32 offline)`),
     state: result.state,
   });
 });
