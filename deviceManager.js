@@ -1,26 +1,209 @@
 /**
- * Device & Client Connection Manager
- * Maintains real-time state, manages WebSocket sockets, and handles telemetry.
+ * Automated Smart Clothesline Device & System Manager
+ * Manages real-time state, weather automation, operating modes, and WebSocket connections.
  */
+
+const weatherService = require('./weatherService');
 
 class DeviceManager {
   constructor() {
-    // Current state of connected ESP32 hardware
+    // Current state of Automated Smart Clothesline system
     this.deviceState = {
       connected: false,
-      deviceId: 'esp32_default',
-      direction: 'stop',
-      speed: 128,
+      deviceId: 'esp32_clothesline',
+      
+      // Clothesline & Motor Status
+      clotheslinePosition: 'open', // 'open' | 'closed' | 'partial'
+      motorStatus: 'idle',        // 'idle' | 'extending' | 'retracting' | 'stopped'
+      direction: 'stop',          // 'c' (open/extend) | 'cc' (close/retract) | 'stop'
+      speed: 0,
       buzzer: false,
+      
+      // Control Modes & Safety Overrides
+      systemMode: 'auto',         // 'auto' | 'manual'
+      rainSafetyOverride: true,   // true | false
+      
+      // Sensor & Hardware Telemetry
+      rainSensor: false,          // false (dry) | true (rain)
       rssi: null,
       uptime: 0,
       lastSeen: null,
       ip: null,
+      
+      // Weather Forecast Snapshot
+      weatherForecast: {
+        rainProbability: 0,
+        isRaining: false,
+        condition: 'Clear Sky',
+        temperature: 28,
+        humidity: 75,
+        lastUpdated: null,
+      },
     };
 
     // Active WebSocket connections
     this.deviceSocket = null;
     this.clientSockets = new Set();
+
+    // Start Weather Polling & Automated Decision Engine
+    this.initWeatherEngine();
+  }
+
+  /**
+   * Initializes Weather Service polling & Automated Decision Engine
+   */
+  initWeatherEngine() {
+    weatherService.startPolling(180000, (forecast) => { // Poll every 3 minutes
+      this.deviceState.weatherForecast = forecast;
+      this.evaluateAutomatedRules('weather_update');
+      this.broadcastStateToClients();
+    });
+  }
+
+  /**
+   * Evaluates control priority rules for Smart Clothesline Automation:
+   * 1. Rain Safety Override (If ON & Rain Detected -> Force CLOSE even in Manual Mode)
+   * 2. Automatic Mode Rules (If AUTO & High Rain Prob / Active Rain -> CLOSE; Else -> OPEN)
+   * 3. Manual Mode Rules (Respect manual user commands)
+   */
+  evaluateAutomatedRules(triggerReason = 'periodic') {
+    const { systemMode, rainSafetyOverride, weatherForecast, rainSensor, clotheslinePosition } = this.deviceState;
+    const isRainDetected = rainSensor || weatherForecast.isRaining;
+    const isHighRainRisk = weatherForecast.rainProbability >= 60;
+
+    const time = new Date().toLocaleTimeString();
+
+    // Rule 1: Rain Safety Override (Active during Manual Mode if enabled)
+    if (systemMode === 'manual' && rainSafetyOverride && isRainDetected) {
+      if (clotheslinePosition !== 'closed') {
+        console.log(`[${time}] 🌧️ [RAIN OVERRIDE] Rain detected in Manual Mode! Auto-retracting clothesline...`);
+        this.executeClotheslineAction('close', 'Rain Safety Override Active');
+      }
+      return;
+    }
+
+    // Rule 2: Automatic Mode Decision Engine
+    if (systemMode === 'auto') {
+      if (isRainDetected || isHighRainRisk) {
+        if (clotheslinePosition !== 'closed') {
+          console.log(`[${time}] 🌧️ [AUTO MODE] Rain detected or High Rain Risk (${weatherForecast.rainProbability}%). Retracting clothesline...`);
+          this.executeClotheslineAction('close', `Auto Rain Protection (${weatherForecast.condition})`);
+        }
+      } else {
+        if (clotheslinePosition !== 'open') {
+          console.log(`[${time}] ☀️ [AUTO MODE] Weather safe (${weatherForecast.condition}). Opening clothesline...`);
+          this.executeClotheslineAction('open', 'Auto Weather Safe');
+        }
+      }
+    }
+  }
+
+  /**
+   * Changes Operating System Mode ('auto' | 'manual')
+   */
+  setSystemMode(mode) {
+    if (mode !== 'auto' && mode !== 'manual') return false;
+    
+    this.deviceState.systemMode = mode;
+    const time = new Date().toLocaleTimeString();
+    console.log(`[${time}] ⚙️  [MODE CHANGED] System Mode set to: ${mode.toUpperCase()}`);
+
+    // Re-evaluate rules immediately if switched to auto
+    if (mode === 'auto') {
+      this.evaluateAutomatedRules('mode_switch');
+    }
+
+    this.broadcastStateToClients();
+    return true;
+  }
+
+  /**
+   * Toggles Rain Safety Override ('true' | 'false')
+   */
+  setRainSafetyOverride(enabled) {
+    this.deviceState.rainSafetyOverride = Boolean(enabled);
+    const time = new Date().toLocaleTimeString();
+    console.log(`[${time}] 🛡️ [OVERRIDE CHANGED] Rain Safety Override: ${enabled ? 'ENABLED' : 'DISABLED'}`);
+
+    this.evaluateAutomatedRules('override_switch');
+    this.broadcastStateToClients();
+    return true;
+  }
+
+  /**
+   * Executes high-level Clothesline Action ('open' | 'close' | 'stop')
+   */
+  executeClotheslineAction(action, reason = 'User Command') {
+    let dir = 'stop';
+    let speed = 0;
+    let newPos = this.deviceState.clotheslinePosition;
+    let newMotorStatus = 'idle';
+
+    if (action === 'open') {
+      dir = 'c';
+      speed = 255;
+      newPos = 'open';
+      newMotorStatus = 'extending';
+    } else if (action === 'close') {
+      dir = 'cc';
+      speed = 255;
+      newPos = 'closed';
+      newMotorStatus = 'retracting';
+    } else if (action === 'stop') {
+      dir = 'stop';
+      speed = 0;
+      newPos = 'partial';
+      newMotorStatus = 'stopped';
+    }
+
+    this.deviceState.direction = dir;
+    this.deviceState.speed = speed;
+    this.deviceState.clotheslinePosition = newPos;
+    this.deviceState.motorStatus = newMotorStatus;
+
+    const time = new Date().toLocaleTimeString();
+    console.log(`[${time}] 👕 [CLOTHESLINE ACTION] ${action.toUpperCase()} (${reason}) --> Dir: ${dir} | Speed: ${speed}`);
+
+    const payload = {
+      action: 'motor',
+      clotheslineAction: action,
+      dir: dir,
+      speed: speed,
+      reason: reason,
+    };
+
+    const sent = this.sendToDevice(payload);
+    this.broadcastStateToClients();
+    return { success: sent, state: this.deviceState };
+  }
+
+  /**
+   * Legacy raw motor command wrapper
+   */
+  sendMotorCommand(direction, speed) {
+    let action = 'stop';
+    if (direction === 'c') action = 'open';
+    if (direction === 'cc') action = 'close';
+    return this.executeClotheslineAction(action, 'Direct Motor API');
+  }
+
+  /**
+   * Send buzzer command
+   */
+  sendBuzzerCommand(state) {
+    this.deviceState.buzzer = Boolean(state);
+
+    const time = new Date().toLocaleTimeString();
+    console.log(`[${time}] 🔔 [ACTION: BUZZER] State: ${state ? 'ON' : 'OFF'}`);
+
+    const payload = {
+      action: 'buzzer',
+      state: Boolean(state),
+    };
+
+    const sent = this.sendToDevice(payload);
+    this.broadcastStateToClients();
+    return { success: sent, state: this.deviceState };
   }
 
   /**
@@ -69,6 +252,13 @@ class DeviceManager {
         if (payload.buzzer !== undefined) this.deviceState.buzzer = payload.buzzer;
         if (payload.rssi !== undefined) this.deviceState.rssi = payload.rssi;
         if (payload.uptime !== undefined) this.deviceState.uptime = payload.uptime;
+        if (payload.rainSensor !== undefined) {
+          const prevRain = this.deviceState.rainSensor;
+          this.deviceState.rainSensor = Boolean(payload.rainSensor);
+          if (prevRain !== this.deviceState.rainSensor) {
+            this.evaluateAutomatedRules('rain_sensor_change');
+          }
+        }
 
         this.broadcastStateToClients();
       } else if (payload.type === 'ack') {
@@ -100,51 +290,6 @@ class DeviceManager {
     ws.on('error', (err) => {
       console.error('[CLIENT ERR]', err.message);
     });
-  }
-
-  /**
-   * Send motor command to ESP32 and update local state
-   */
-  sendMotorCommand(direction, speed) {
-    this.deviceState.direction = direction;
-    this.deviceState.speed = speed;
-
-    const time = new Date().toLocaleTimeString();
-    let dirLabel = '🛑 STOP';
-    if (direction === 'c') dirLabel = '↻ CLOCKWISE (C)';
-    if (direction === 'cc') dirLabel = '↺ COUNTER-CLOCKWISE (CC)';
-
-    console.log(`[${time}] ⚙️  [ACTION: MOTOR] Direction: ${dirLabel} | Speed: ${speed}/255`);
-
-    const payload = {
-      action: 'motor',
-      dir: direction,
-      speed: Number(speed),
-    };
-
-    const sent = this.sendToDevice(payload);
-    this.broadcastStateToClients();
-    return { success: sent, state: this.deviceState };
-  }
-
-  /**
-   * Send buzzer command to ESP32 and update local state
-   */
-  sendBuzzerCommand(state) {
-    this.deviceState.buzzer = Boolean(state);
-
-    const time = new Date().toLocaleTimeString();
-    const buzzerLabel = state ? '🔊 ON' : '🔇 OFF';
-    console.log(`[${time}] 🔔 [ACTION: BUZZER] State: ${buzzerLabel}`);
-
-    const payload = {
-      action: 'buzzer',
-      state: Boolean(state),
-    };
-
-    const sent = this.sendToDevice(payload);
-    this.broadcastStateToClients();
-    return { success: sent, state: this.deviceState };
   }
 
   /**

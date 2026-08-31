@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const deviceManager = require('./deviceManager');
+const weatherService = require('./weatherService');
 
 const PORT = process.env.PORT || 4000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -14,7 +15,7 @@ app.use(express.json());
 
 // Log incoming API calls
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api') && req.path !== '/api/health') {
+  if (req.path.startsWith('/api') && req.path !== '/api/health' && req.path !== '/api/status') {
     const time = new Date().toLocaleTimeString();
     console.log(`[${time}] 🌐 [HTTP REQUEST] ${req.method} ${req.path}`);
   }
@@ -27,8 +28,8 @@ app.use((req, res, next) => {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
-    server: 'ESP32 Motor Control Backend',
-    version: '1.0.0',
+    server: 'Automated Smart Clothesline Backend',
+    version: '2.0.0',
     uptime: Math.floor(process.uptime()),
     device: deviceManager.getSnapshot(),
   });
@@ -39,7 +40,59 @@ app.get('/api/status', (req, res) => {
   res.json(deviceManager.getSnapshot());
 });
 
-// Motor Control Endpoint
+// Weather Snapshot Endpoint
+app.get('/api/weather', async (req, res) => {
+  const forecast = await weatherService.fetchWeather();
+  res.json(forecast);
+});
+
+// Mode Selector Endpoint (AUTOMATIC / MANUAL)
+app.post('/api/mode', (req, res) => {
+  const { mode } = req.body;
+  if (!mode || (mode !== 'auto' && mode !== 'manual')) {
+    return res.status(400).json({ error: 'Invalid or missing field "mode". Must be "auto" or "manual".' });
+  }
+
+  const success = deviceManager.setSystemMode(mode);
+  res.json({
+    success,
+    mode,
+    state: deviceManager.getSnapshot(),
+  });
+});
+
+// Rain Safety Override Endpoint
+app.post('/api/override', (req, res) => {
+  const { enabled } = req.body;
+  if (enabled === undefined) {
+    return res.status(400).json({ error: 'Missing required boolean field "enabled".' });
+  }
+
+  const success = deviceManager.setRainSafetyOverride(Boolean(enabled));
+  res.json({
+    success,
+    rainSafetyOverride: Boolean(enabled),
+    state: deviceManager.getSnapshot(),
+  });
+});
+
+// Clothesline Control Endpoint (OPEN / CLOSE / STOP)
+app.post('/api/clothesline', (req, res) => {
+  const { action } = req.body;
+  if (!action || (action !== 'open' && action !== 'close' && action !== 'stop')) {
+    return res.status(400).json({ error: 'Invalid or missing field "action". Must be "open", "close", or "stop".' });
+  }
+
+  const result = deviceManager.executeClotheslineAction(action, 'Manual API Command');
+  res.json({
+    success: result.success,
+    action,
+    message: result.success ? `Clothesline ${action.toUpperCase()} command sent` : `Clothesline ${action.toUpperCase()} command queued (ESP32 offline)`,
+    state: result.state,
+  });
+});
+
+// Legacy Motor Control Endpoint
 app.post('/api/motor', (req, res) => {
   const { dir, speed } = req.body;
   if (!dir) {
@@ -106,7 +159,7 @@ server.on('upgrade', (request, socket, head) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`=================================================`);
-  console.log(` ESP32 Control Backend Service Running           `);
+  console.log(` Automated Smart Clothesline Backend Running     `);
   console.log(` HTTP API:   http://${HOST}:${PORT}/api/health    `);
   console.log(` Device WS:  ws://${HOST}:${PORT}/ws/device       `);
   console.log(` Client WS:  ws://${HOST}:${PORT}/ws/client       `);
