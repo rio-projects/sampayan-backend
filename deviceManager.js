@@ -258,6 +258,24 @@ class DeviceManager {
     this.deviceState.motorStatus = newMotorStatus;
     this.deviceState.buzzer = buzzerStateNeeded;
 
+    // Clear any existing movement timer
+    if (this.motorTimer) {
+      clearTimeout(this.motorTimer);
+      this.motorTimer = null;
+    }
+
+    // Automatically transition motorStatus to 'idle' and turn off buzzer after 6 seconds of movement
+    if (action === 'open' || action === 'close') {
+      this.motorTimer = setTimeout(() => {
+        this.deviceState.motorStatus = 'idle';
+        this.deviceState.direction = 'stop';
+        this.deviceState.buzzer = false;
+        this.sendToDevice({ action: 'motor', dir: 'stop', speed: 0 });
+        this.sendToDevice({ action: 'buzzer', state: false });
+        this.broadcastStateToClients();
+      }, 6000); // 6-second travel time
+    }
+
     const payload = {
       action: 'motor',
       clotheslineAction: action,
@@ -341,7 +359,16 @@ class DeviceManager {
       this.deviceState.lastSeen = new Date().toISOString();
 
       if (payload.type === 'telemetry' || payload.type === 'status') {
-        if (payload.direction !== undefined) this.deviceState.direction = payload.direction;
+        if (payload.direction !== undefined) {
+          this.deviceState.direction = payload.direction;
+          if (payload.direction === 'stop') {
+            this.deviceState.motorStatus = 'idle';
+          } else if (payload.direction === 'c') {
+            this.deviceState.motorStatus = 'extending';
+          } else if (payload.direction === 'cc') {
+            this.deviceState.motorStatus = 'retracting';
+          }
+        }
         if (payload.speed !== undefined) this.deviceState.speed = payload.speed;
         if (payload.buzzer !== undefined) this.deviceState.buzzer = payload.buzzer;
         if (payload.rssi !== undefined) this.deviceState.rssi = payload.rssi;
