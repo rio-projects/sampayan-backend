@@ -7,6 +7,7 @@ const weatherService = require('./weatherService');
 const pagasaService = require('./pagasaService');
 const aiAnalysisService = require('./aiAnalysisService');
 const notificationService = require('./notificationService');
+const motorControlManager = require('./motorControlManager');
 
 class DeviceManager {
   constructor() {
@@ -14,14 +15,21 @@ class DeviceManager {
     this.deviceState = {
       connected: false,
       deviceId: 'esp32_clothesline',
-      
-      // Clothesline & Motor Status
+
+      // Clothesline & Motor Direction Status
       clotheslinePosition: 'open', // 'open' | 'closed' | 'partial'
       motorStatus: 'idle',        // 'idle' | 'extending' | 'retracting' | 'stopped'
+      motorState: 'IDLE',         // 'IDLE' | 'CLOCKWISE' | 'COUNTER_CLOCKWISE' | 'STOPPING'
+      motorDirection: 'NONE',     // 'NONE' | 'CLOCKWISE' | 'COUNTER_CLOCKWISE'
+      lastDirection: 'NONE',
+      commandSource: 'SYSTEM',
+      commandStartedAt: null,
+      commandDuration: 0,
+
       direction: 'stop',          // 'c' (open/extend) | 'cc' (close/retract) | 'stop'
       speed: 255,
       buzzer: false,
-      
+
       // Control Modes & Safety Overrides
       systemMode: 'auto',         // 'auto' | 'manual'
       rainSafetyOverride: true,   // true | false (User facing: Rain Protection)
@@ -32,6 +40,7 @@ class DeviceManager {
         openDurationSeconds: 1.8,    // Decimal 0.1s to 5.0s
         closeDurationSeconds: 2.1,   // Decimal 0.1s to 5.0s
         travelDurationSeconds: 10,   // Fallback motor travel duration in seconds
+        directionMapping: 'NORMAL',  // 'NORMAL' (CW=Open, CCW=Close) | 'REVERSED' (CW=Close, CCW=Open)
         lookaheadHours: 3,           // Lookahead window N hours (1 to 12)
         rainThreshold: 10,           // Rain probability threshold % (e.g., 10%)
         autoClose: true,             // Auto-close when rain risk detected (ON by default)
@@ -51,14 +60,14 @@ class DeviceManager {
           automationFailure: true,
         },
       },
-      
+
       // Sensor & Hardware Telemetry
       rainSensor: false,          // false (dry) | true (rain)
       rssi: null,
       uptime: 0,
       lastSeen: null,
       ip: null,
-      
+
       // Weather Forecast Snapshot & Lookahead
       weatherForecast: {
         rainProbability: 0,
@@ -88,6 +97,14 @@ class DeviceManager {
     // Active WebSocket connections
     this.deviceSocket = null;
     this.clientSockets = new Set();
+
+    // Initialize Stateful Motor Control Manager
+    motorControlManager.init({
+      sendToDevice: (payload) => this.sendToDevice(payload),
+      broadcastState: () => this.broadcastStateToClients(),
+      addActivityLog: (t, d, type) => this.addActivityLog(t, d, type),
+      deviceState: this.deviceState,
+    });
 
     // Add initial system startup activity log
     this.addActivityLog('System Initialized', 'Smart Clothesline backend operational', 'system');
@@ -123,7 +140,7 @@ class DeviceManager {
       await pagasaService.pollPagasaData(forecast);
       this.deviceState.pagasaIntelligence = pagasaService.getIntelligence();
       this.deviceState.aiAnalysis = aiAnalysisService.analyze(this.deviceState.weatherForecast, this.deviceState);
-      
+
       this.evaluateAutomatedRules('weather_update');
       this.broadcastStateToClients();
     });
@@ -156,7 +173,7 @@ class DeviceManager {
    */
   evaluateAutomatedRules(triggerReason = 'periodic') {
     const { systemMode, rainSafetyOverride, weatherForecast, rainSensor, clotheslinePosition, settings, pagasaIntelligence, aiAnalysis } = this.deviceState;
-    
+
     // N-Hour Lookahead Rain Evaluation
     const lookaheadRainProb = weatherService.getLookaheadRainProb(settings.lookaheadHours);
     this.deviceState.weatherForecast.lookaheadRainProbability = lookaheadRainProb;
@@ -171,8 +188,7 @@ class DeviceManager {
     if ((systemMode === 'manual' && rainSafetyOverride && (isRainDetected || isRainRiskInNextNHours || isSeverePagasa)) || isSeverePagasa) {
       if (clotheslinePosition !== 'closed') {
         const desc = isSeverePagasa ? `PAGASA Alert: ${pagasaIntelligence.systemName}` : (isRainDetected ? 'Physical rain sensor triggered' : `${lookaheadRainProb}% rain expected in next ${settings.lookaheadHours}h`);
-        this.addActivityLog('Rain Protection Triggered', desc, 'rain_sensor');
-        this.executeClotheslineAction('close', `Rain Protection (${desc})`);
+        this.executeClotheslineAction('close', `Rain Protection (${desc})`, null, false, 'SAFETY');
 
         if (settings.pushNotificationsEnabled && settings.alerts.pagasaAlerts) {
           notificationService.sendNotification('🌧 Protecting Your Laundry', desc, { action: 'close' });
@@ -190,8 +206,7 @@ class DeviceManager {
           else if (isHabagatOrRainSystem) desc = `PAGASA: ${pagasaIntelligence.systemName} active`;
           else if (isAiCritical) desc = `AI Warning: ${aiAnalysis.expectedPattern}`;
 
-          this.addActivityLog('Clothesline Closed Automatically', desc, 'rain_risk');
-          this.executeClotheslineAction('close', `Auto Protection (${desc})`);
+          this.executeClotheslineAction('close', `Auto Protection (${desc})`, null, false, 'AUTOMATION');
 
           if (settings.pushNotificationsEnabled && settings.alerts.autoRetract) {
             notificationService.sendNotification('🌧 Protecting Your Laundry', `Sampayan is retracting because ${desc}.`, { action: 'close' });
@@ -201,8 +216,7 @@ class DeviceManager {
         // Safe dry conditions
         if (settings.autoReopen && clotheslinePosition !== 'open' && !isHabagatOrRainSystem && aiAnalysis.aiRiskLevel === 'LOW') {
           const desc = `<${settings.rainThreshold}% rain expected for next ${settings.lookaheadHours} hours`;
-          this.addActivityLog('Clothesline Opened Automatically', desc, 'safe');
-          this.executeClotheslineAction('open', `Auto Reopen (${desc})`);
+          this.executeClotheslineAction('open', `Auto Reopen (${desc})`, null, false, 'AUTOMATION');
 
           if (settings.pushNotificationsEnabled && settings.alerts.autoOpen) {
             notificationService.sendNotification('☀️ Laundry Safe', `Sampayan is reopening the clothesline under clear dry skies.`, { action: 'open' });
@@ -215,9 +229,9 @@ class DeviceManager {
   /**
    * Updates Settings Configuration
    */
-  updateSettings({ motorSpeed, openDurationSeconds, closeDurationSeconds, travelDurationSeconds, lookaheadHours, rainThreshold, autoClose, autoReopen, aiAnalysisEnabled, pagasaEnabled, pushNotificationsEnabled, alerts }) {
+  updateSettings({ motorSpeed, openDurationSeconds, closeDurationSeconds, travelDurationSeconds, directionMapping, lookaheadHours, rainThreshold, autoClose, autoReopen, aiAnalysisEnabled, pagasaEnabled, pushNotificationsEnabled, alerts }) {
     if (motorSpeed !== undefined) {
-      this.deviceState.settings.motorSpeed = Math.max(64, Math.min(255, Number(motorSpeed)));
+      this.deviceState.settings.motorSpeed = Math.max(25, Math.min(255, Number(motorSpeed)));
       this.deviceState.speed = this.deviceState.settings.motorSpeed;
     }
 
@@ -231,6 +245,10 @@ class DeviceManager {
 
     if (travelDurationSeconds !== undefined) {
       this.deviceState.settings.travelDurationSeconds = Math.max(3, Math.min(60, Number(travelDurationSeconds)));
+    }
+
+    if (directionMapping !== undefined && (directionMapping === 'NORMAL' || directionMapping === 'REVERSED')) {
+      this.deviceState.settings.directionMapping = directionMapping;
     }
 
     if (lookaheadHours !== undefined) {
@@ -268,7 +286,7 @@ class DeviceManager {
       };
     }
 
-    this.addActivityLog('Settings Updated', `Speed: ${Math.round((this.deviceState.settings.motorSpeed/255)*100)}% | Open: ${this.deviceState.settings.openDurationSeconds}s | Close: ${this.deviceState.settings.closeDurationSeconds}s`, 'system');
+    this.addActivityLog('Settings Updated', `Speed: ${Math.round((this.deviceState.settings.motorSpeed / 255) * 100)}% | Open: ${this.deviceState.settings.openDurationSeconds}s | Close: ${this.deviceState.settings.closeDurationSeconds}s`, 'system');
 
     // Re-evaluate rules immediately with new settings
     this.evaluateAutomatedRules('settings_update');
@@ -281,7 +299,7 @@ class DeviceManager {
    */
   setSystemMode(mode) {
     if (mode !== 'auto' && mode !== 'manual') return false;
-    
+
     this.deviceState.systemMode = mode;
     this.addActivityLog('System Mode Changed', `Switched to ${mode.toUpperCase()} Mode`, 'manual');
 
@@ -309,109 +327,66 @@ class DeviceManager {
   /**
    * Executes high-level Clothesline Action ('open' | 'close' | 'stop')
    */
-  executeClotheslineAction(action, reason = 'User Command', customSpeed = null, force = false) {
+  executeClotheslineAction(action, reason = 'User Command', customSpeed = null, force = false, source = 'MANUAL') {
+    const actUpper = (action || '').toUpperCase();
+
     // Prevent continuous motor run if already in target position
-    if (!force && this.deviceState.motorStatus === 'idle') {
-      if (action === 'open' && this.deviceState.clotheslinePosition === 'open') {
+    if (!force && this.deviceState.motorState === 'IDLE') {
+      if (actUpper === 'OPEN' && this.deviceState.clotheslinePosition === 'open') {
         return { success: true, message: 'Clothesline is already fully open', state: this.deviceState };
       }
-      if (action === 'close' && this.deviceState.clotheslinePosition === 'closed') {
+      if (actUpper === 'CLOSE' && this.deviceState.clotheslinePosition === 'closed') {
         return { success: true, message: 'Clothesline is already fully retracted', state: this.deviceState };
       }
     }
 
-    let dir = 'stop';
-    let speed = 0;
-    let newPos = this.deviceState.clotheslinePosition;
-    let newMotorStatus = 'idle';
     let durationSeconds = 1.8;
-
-    const targetSpeed = customSpeed !== null ? Number(customSpeed) : this.deviceState.settings.motorSpeed;
-    let buzzerStateNeeded = false;
-
-    if (action === 'open') {
-      dir = 'c';
-      speed = targetSpeed;
-      newPos = 'open';
-      newMotorStatus = 'extending';
+    if (actUpper === 'OPEN') {
       durationSeconds = this.deviceState.settings.openDurationSeconds || 1.8;
-      buzzerStateNeeded = true;
-      this.addActivityLog('Clothesline Opened', reason, 'manual');
-    } else if (action === 'close') {
-      dir = 'cc';
-      speed = targetSpeed;
-      newPos = 'closed';
-      newMotorStatus = 'retracting';
+    } else if (actUpper === 'CLOSE') {
       durationSeconds = this.deviceState.settings.closeDurationSeconds || 2.1;
-      buzzerStateNeeded = true;
-      this.addActivityLog('Clothesline Closed', reason, 'manual');
-    } else if (action === 'stop') {
-      dir = 'stop';
-      speed = 0;
-      newPos = 'partial';
-      newMotorStatus = 'stopped';
-      buzzerStateNeeded = false;
-      this.addActivityLog('Motor Stopped', reason, 'manual');
     }
 
-    this.deviceState.direction = dir;
-    this.deviceState.speed = speed;
-    this.deviceState.clotheslinePosition = newPos;
-    this.deviceState.motorStatus = newMotorStatus;
-    this.deviceState.buzzer = buzzerStateNeeded;
-
-    // Clear any existing movement timer
-    if (this.motorTimer) {
-      clearTimeout(this.motorTimer);
-      this.motorTimer = null;
-    }
-
-    // Automatically transition motorStatus to 'idle' and turn off buzzer after durationSeconds
-    const travelMs = Math.round(durationSeconds * 1000);
-    if (action === 'open' || action === 'close') {
-      this.motorTimer = setTimeout(() => {
-        this.deviceState.motorStatus = 'idle';
-        this.deviceState.direction = 'stop';
-        this.deviceState.buzzer = false;
-        this.sendToDevice({ action: 'motor', dir: 'stop', speed: 0 });
-        this.sendToDevice({ action: 'buzzer', state: false });
-        
-        if (this.deviceState.settings.pushNotificationsEnabled) {
-          const title = action === 'open' ? '☀️ Clothesline Opened' : '✅ Laundry Protected';
-          const body = action === 'open' ? 'Clothesline is now fully extended.' : 'The clothesline has been automatically retracted.';
-          notificationService.sendNotification(title, body, { action });
-        }
-
-        this.broadcastStateToClients();
-      }, travelMs);
-    }
-
-    const payload = {
-      action: 'motor',
-      clotheslineAction: action,
-      dir: dir,
-      speed: speed,
+    const result = motorControlManager.requestMotorCommand({
+      action: actUpper,
+      speed: customSpeed !== null ? Number(customSpeed) : this.deviceState.settings.motorSpeed,
       duration: durationSeconds,
+      source: source,
       reason: reason,
+    });
+
+    return {
+      success: this.deviceState.connected,
+      message: result.message,
+      state: this.deviceState,
     };
-
-    const sent = this.sendToDevice(payload);
-    
-    // Automatically trigger buzzer control payload on movement/stop
-    this.sendToDevice({ action: 'buzzer', state: buzzerStateNeeded });
-
-    this.broadcastStateToClients();
-    return { success: sent, state: this.deviceState };
   }
 
   /**
-   * Legacy raw motor command wrapper
+   * Legacy raw motor command wrapper ('CLOCKWISE' | 'COUNTER_CLOCKWISE' | 'STOP' or 'c' | 'cc' | 'stop')
    */
-  sendMotorCommand(direction, speed) {
-    let action = 'stop';
-    if (direction === 'c') action = 'open';
-    if (direction === 'cc') action = 'close';
-    return this.executeClotheslineAction(action, 'Direct Motor API', speed);
+  sendMotorCommand(direction, speed, source = 'MANUAL', reason = 'Direct Motor API') {
+    let dir = direction;
+    if (direction === 'c') dir = 'CLOCKWISE';
+    if (direction === 'cc') dir = 'COUNTER_CLOCKWISE';
+    if (direction === 'stop') dir = 'STOP';
+
+    let durationSeconds = 1.8;
+    if (dir === 'COUNTER_CLOCKWISE') durationSeconds = this.deviceState.settings.closeDurationSeconds || 2.1;
+
+    const result = motorControlManager.requestMotorCommand({
+      targetDirection: dir,
+      speed: speed !== undefined ? Number(speed) : this.deviceState.settings.motorSpeed,
+      duration: durationSeconds,
+      source: source,
+      reason: reason,
+    });
+
+    return {
+      success: this.deviceState.connected,
+      message: result.message,
+      state: this.deviceState,
+    };
   }
 
   /**
@@ -469,16 +444,14 @@ class DeviceManager {
       const payload = JSON.parse(data.toString());
       this.deviceState.lastSeen = new Date().toISOString();
 
+      // Process hardware ACKs and state notifications
+      if (payload.type === 'ack' || payload.status) {
+        motorControlManager.handleHardwareAck(payload);
+      }
+
       if (payload.type === 'telemetry' || payload.type === 'status') {
         if (payload.direction !== undefined) {
           this.deviceState.direction = payload.direction;
-          if (payload.direction === 'stop') {
-            this.deviceState.motorStatus = 'idle';
-          } else if (payload.direction === 'c') {
-            this.deviceState.motorStatus = 'extending';
-          } else if (payload.direction === 'cc') {
-            this.deviceState.motorStatus = 'retracting';
-          }
         }
         if (payload.speed !== undefined) this.deviceState.speed = payload.speed;
         if (payload.buzzer !== undefined) this.deviceState.buzzer = payload.buzzer;

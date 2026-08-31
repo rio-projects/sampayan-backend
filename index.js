@@ -110,33 +110,36 @@ app.post('/api/override', (req, res) => {
 
 // Clothesline Control Endpoint (OPEN / CLOSE / STOP)
 app.post('/api/clothesline', (req, res) => {
-  const { action, speed, force } = req.body;
-  if (!action || (action !== 'open' && action !== 'close' && action !== 'stop')) {
+  const { action, speed, force, source = 'MANUAL' } = req.body;
+  const normalizedAction = (action || '').toLowerCase();
+  if (!normalizedAction || (normalizedAction !== 'open' && normalizedAction !== 'close' && normalizedAction !== 'stop')) {
     return res.status(400).json({ error: 'Invalid or missing field "action". Must be "open", "close", or "stop".' });
   }
 
-  const result = deviceManager.executeClotheslineAction(action, 'Manual API Command', speed, force);
+  const result = deviceManager.executeClotheslineAction(normalizedAction, `Manual API Command (${source})`, speed, force, source);
   res.json({
     success: result.success,
-    action,
-    message: result.message || (result.success ? `Clothesline ${action.toUpperCase()} command sent` : `Clothesline ${action.toUpperCase()} command queued (ESP32 offline)`),
+    action: normalizedAction,
+    message: result.message,
     state: result.state,
   });
 });
 
-// Legacy Motor Control Endpoint
+// Explicit Motor Direction Control Endpoint (CLOCKWISE / COUNTER_CLOCKWISE / STOP)
 app.post('/api/motor', (req, res) => {
-  const { dir, speed } = req.body;
-  if (!dir) {
-    return res.status(400).json({ error: 'Missing required field: dir' });
+  const { direction, dir, speed, source = 'MANUAL' } = req.body;
+  const targetDir = direction || dir;
+
+  if (!targetDir) {
+    return res.status(400).json({ error: 'Missing required field: direction (CLOCKWISE, COUNTER_CLOCKWISE, STOP)' });
   }
 
-  const speedVal = speed !== undefined ? Number(speed) : 128;
-  const result = deviceManager.sendMotorCommand(dir, speedVal);
+  const speedVal = speed !== undefined ? Number(speed) : 255;
+  const result = deviceManager.sendMotorCommand(targetDir, speedVal, source, `Direct Motor API (${source})`);
 
   return res.json({
     success: result.success,
-    message: result.success ? 'Command sent to ESP32' : 'Command queued (ESP32 offline)',
+    message: result.message,
     state: result.state,
   });
 });
