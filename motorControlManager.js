@@ -176,9 +176,10 @@ class MotorControlManager {
       this.motorState = 'IDLE';
       this.motorDirection = 'NONE';
       this.notifyStateChange();
-    } else {
-      // Execute CLOCKWISE or COUNTER_CLOCKWISE
-      const commandPayload = {
+    }
+
+    // 4. Execute CLOCKWISE or COUNTER_CLOCKWISE
+    const commandPayload = {
         command: 'MOTOR_MOVE',
         direction: direction,
         action: action, // Legacy support
@@ -231,7 +232,6 @@ class MotorControlManager {
 
         this.notifyStateChange();
       }, durationMs);
-    }
   }
 
   /**
