@@ -200,8 +200,6 @@ class MotorControlManager {
       if (this.deviceStateRef) {
         this.deviceStateRef.speed = speed;
         this.deviceStateRef.buzzer = true;
-        if (action === 'OPEN') this.deviceStateRef.clotheslinePosition = 'open';
-        if (action === 'CLOSE') this.deviceStateRef.clotheslinePosition = 'closed';
       }
 
       // Send WebSocket message to ESP32
@@ -224,6 +222,8 @@ class MotorControlManager {
 
         if (this.deviceStateRef) {
           this.deviceStateRef.buzzer = false;
+          if (action === 'OPEN') this.deviceStateRef.clotheslinePosition = 'open';
+          if (action === 'CLOSE') this.deviceStateRef.clotheslinePosition = 'closed';
         }
 
         if (this.sendToDeviceCallback) {

@@ -331,6 +331,14 @@ class DeviceManager {
     const actUpper = (action || '').toUpperCase();
     const shouldForce = force || source === 'MANUAL';
 
+    if (!this.deviceSocket || this.deviceSocket.readyState !== 1) {
+      return {
+        success: false,
+        message: 'ESP32 is offline; motor command was not sent',
+        state: this.deviceState,
+      };
+    }
+
     // Prevent continuous motor run if already in target position (only for automated triggers)
     if (!shouldForce && this.deviceState.motorState === 'IDLE') {
       if (actUpper === 'OPEN' && this.deviceState.clotheslinePosition === 'open') {
@@ -367,6 +375,14 @@ class DeviceManager {
    * Legacy raw motor command wrapper ('CLOCKWISE' | 'COUNTER_CLOCKWISE' | 'STOP' or 'c' | 'cc' | 'stop')
    */
   sendMotorCommand(direction, speed, source = 'MANUAL', reason = 'Direct Motor API') {
+    if (!this.deviceSocket || this.deviceSocket.readyState !== 1) {
+      return {
+        success: false,
+        message: 'ESP32 is offline; motor command was not sent',
+        state: this.deviceState,
+      };
+    }
+
     let dir = direction;
     if (direction === 'c') dir = 'CLOCKWISE';
     if (direction === 'cc') dir = 'COUNTER_CLOCKWISE';

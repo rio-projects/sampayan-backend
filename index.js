@@ -117,7 +117,7 @@ app.post('/api/clothesline', (req, res) => {
   }
 
   const result = deviceManager.executeClotheslineAction(normalizedAction, `Manual API Command (${source})`, speed, force, source);
-  res.json({
+  res.status(result.success ? 200 : 503).json({
     success: result.success,
     action: normalizedAction,
     message: result.message,
@@ -137,7 +137,7 @@ app.post('/api/motor', (req, res) => {
   const speedVal = speed !== undefined ? Number(speed) : 255;
   const result = deviceManager.sendMotorCommand(targetDir, speedVal, source, `Direct Motor API (${source})`);
 
-  return res.json({
+  return res.status(result.success ? 200 : 503).json({
     success: result.success,
     message: result.message,
     state: result.state,
