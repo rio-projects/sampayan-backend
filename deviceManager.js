@@ -227,23 +227,28 @@ class DeviceManager {
 
     const targetSpeed = customSpeed !== null ? Number(customSpeed) : this.deviceState.settings.motorSpeed;
 
+    let buzzerStateNeeded = false;
+
     if (action === 'open') {
       dir = 'c';
       speed = targetSpeed;
       newPos = 'open';
       newMotorStatus = 'extending';
+      buzzerStateNeeded = true;
       this.addActivityLog('Clothesline Opened', reason, 'manual');
     } else if (action === 'close') {
       dir = 'cc';
       speed = targetSpeed;
       newPos = 'closed';
       newMotorStatus = 'retracting';
+      buzzerStateNeeded = true;
       this.addActivityLog('Clothesline Closed', reason, 'manual');
     } else if (action === 'stop') {
       dir = 'stop';
       speed = 0;
       newPos = 'partial';
       newMotorStatus = 'stopped';
+      buzzerStateNeeded = false;
       this.addActivityLog('Motor Stopped', reason, 'manual');
     }
 
@@ -251,6 +256,7 @@ class DeviceManager {
     this.deviceState.speed = speed;
     this.deviceState.clotheslinePosition = newPos;
     this.deviceState.motorStatus = newMotorStatus;
+    this.deviceState.buzzer = buzzerStateNeeded;
 
     const payload = {
       action: 'motor',
@@ -261,6 +267,10 @@ class DeviceManager {
     };
 
     const sent = this.sendToDevice(payload);
+    
+    // Automatically trigger buzzer control payload on movement/stop
+    this.sendToDevice({ action: 'buzzer', state: buzzerStateNeeded });
+
     this.broadcastStateToClients();
     return { success: sent, state: this.deviceState };
   }
