@@ -71,7 +71,7 @@ class DeviceManager {
   addActivityLog(title, description, type = 'system') {
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const logItem = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
       timestamp: timeStr,
       rawTime: new Date().toISOString(),
       title,
