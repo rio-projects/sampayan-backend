@@ -41,6 +41,8 @@ Standalone Node.js WebSocket & REST API Backend Service for managing ESP32 Smart
 ## 🔌 Updated REST API Summary
 
 ### System & Telemetry Endpoints
+* **`GET /api/ai-analysis`**: Run or retrieve the cached Gemini weather-risk analysis.
+* **`GET /api/ai-status`**: Report Gemini configuration and cache status without exposing the API key.
 * **`GET /api/health`**: Health check, server uptime, and device state snapshot.
 * **`GET /api/status`**: Detailed device telemetry and weather snapshot.
 * **`GET /api/weather`**: Real-time Open-Meteo weather forecast snapshot.

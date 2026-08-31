@@ -55,10 +55,14 @@ app.get('/api/pagasa', (req, res) => {
 });
 
 // AI Weather Risk Analysis Endpoint
-app.get('/api/ai-analysis', (req, res) => {
+app.get('/api/ai-analysis', async (req, res) => {
   const snapshot = deviceManager.getSnapshot();
-  const analysis = aiAnalysisService.analyze(snapshot.weatherForecast, snapshot);
+  const analysis = await aiAnalysisService.analyze(snapshot.weatherForecast, snapshot);
   res.json(analysis);
+});
+
+app.get('/api/ai-status', (req, res) => {
+  res.json(aiAnalysisService.getStatus());
 });
 
 // Push Notification Registration Endpoint

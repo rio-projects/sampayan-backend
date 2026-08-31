@@ -139,7 +139,9 @@ class DeviceManager {
       this.updateWeatherForecastState(forecast);
       await pagasaService.pollPagasaData(forecast);
       this.deviceState.pagasaIntelligence = pagasaService.getIntelligence();
-      this.deviceState.aiAnalysis = aiAnalysisService.analyze(this.deviceState.weatherForecast, this.deviceState);
+      this.deviceState.aiAnalysis = this.deviceState.settings.aiAnalysisEnabled
+        ? await aiAnalysisService.analyze(this.deviceState.weatherForecast, this.deviceState)
+        : aiAnalysisService.analyzeHeuristic(this.deviceState.weatherForecast, this.deviceState);
 
       this.evaluateAutomatedRules('weather_update');
       this.broadcastStateToClients();

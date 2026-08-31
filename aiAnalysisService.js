@@ -14,13 +14,24 @@ class AiAnalysisService {
     this.cachedAnalysis = null;
     this.lastAnalyzedTime = 0;
     this.cacheTtlMs = 5 * 60 * 1000; // Cache Gemini results for 5 minutes
+    this.model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  }
+
+  getStatus() {
+    return {
+      configured: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+      model: this.model,
+      cacheTtlSeconds: Math.round(this.cacheTtlMs / 1000),
+      hasCachedAnalysis: Boolean(this.cachedAnalysis),
+      lastAnalyzedAt: this.lastAnalyzedTime ? new Date(this.lastAnalyzedTime).toISOString() : null,
+    };
   }
 
   /**
    * Initializes GoogleGenAI client if GEMINI_API_KEY environment variable is present
    */
   getAiClient() {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) return null;
     try {
       return new GoogleGenAI({ apiKey });
@@ -103,7 +114,7 @@ Return ONLY a valid JSON object matching the exact JSON structure:
 `;
 
     const response = await aiClient.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: this.model,
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -115,7 +126,7 @@ Return ONLY a valid JSON object matching the exact JSON structure:
       console.log(`[GEMINI API SUCCESS] 🤖 Risk: ${parsed.aiRiskLevel} | Recommendation: ${parsed.laundryRecommendation}`);
       return {
         ...parsed,
-        source: 'Google Gemini 2.5 Flash',
+        source: 'Google Gemini (' + this.model + ')',
         evaluatedAt: new Date().toISOString(),
       };
     }
