@@ -219,7 +219,17 @@ class DeviceManager {
   /**
    * Executes high-level Clothesline Action ('open' | 'close' | 'stop')
    */
-  executeClotheslineAction(action, reason = 'User Command', customSpeed = null) {
+  executeClotheslineAction(action, reason = 'User Command', customSpeed = null, force = false) {
+    // Prevent continuous motor run if already in target position
+    if (!force && this.deviceState.motorStatus === 'idle') {
+      if (action === 'open' && this.deviceState.clotheslinePosition === 'open') {
+        return { success: true, message: 'Clothesline is already fully open', state: this.deviceState };
+      }
+      if (action === 'close' && this.deviceState.clotheslinePosition === 'closed') {
+        return { success: true, message: 'Clothesline is already fully retracted', state: this.deviceState };
+      }
+    }
+
     let dir = 'stop';
     let speed = 0;
     let newPos = this.deviceState.clotheslinePosition;
