@@ -1,6 +1,6 @@
 /**
  * Weather Service - Open-Meteo API Integration
- * Fetches real-time weather forecasts and rain probabilities without requiring an API key.
+ * Fetches real-time weather forecasts and N-hour rain probabilities without requiring an API key.
  */
 
 const LATITUDE = process.env.WEATHER_LAT || '14.5995';   // Default: Manila, Philippines
@@ -10,11 +10,12 @@ class WeatherService {
   constructor() {
     this.forecast = {
       rainProbability: 0,
+      hourlyProbabilities: [0],
       isRaining: false,
       precipitation: 0,
       temperature: 28,
       humidity: 75,
-      condition: 'Clear / Dry',
+      condition: 'Clear Sky',
       weatherCode: 0,
       lastUpdated: null,
       error: null,
@@ -38,10 +39,10 @@ class WeatherService {
   }
 
   /**
-   * Fetches latest weather data from Open-Meteo API
+   * Fetches latest weather data from Open-Meteo API (12-hour hourly forecast)
    */
   async fetchWeather() {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${LATITUDE}&longitude=${LONGITUDE}&current=temperature_2m,relative_humidity_2m,precipitation,rain,weather_code&hourly=precipitation_probability&forecast_hours=3`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${LATITUDE}&longitude=${LONGITUDE}&current=temperature_2m,relative_humidity_2m,precipitation,rain,weather_code&hourly=precipitation_probability&forecast_hours=12`;
 
     try {
       const controller = new AbortController();
@@ -59,12 +60,13 @@ class WeatherService {
       const current = data.current || {};
       const hourly = data.hourly || {};
 
-      const rainProbabilities = hourly.precipitation_probability || [0];
-      const maxRainProb = Math.max(...rainProbabilities.slice(0, 3), 0);
+      const hourlyProbabilities = hourly.precipitation_probability || [0];
+      const maxRainProb = Math.max(...hourlyProbabilities.slice(0, 3), 0);
       const isCurrentlyRaining = (current.rain > 0 || current.precipitation > 0 || current.weather_code >= 51);
 
       this.forecast = {
         rainProbability: maxRainProb,
+        hourlyProbabilities: hourlyProbabilities,
         isRaining: isCurrentlyRaining,
         precipitation: current.precipitation || 0,
         temperature: current.temperature_2m || 28,
@@ -84,9 +86,18 @@ class WeatherService {
   }
 
   /**
-   * Starts periodic polling (default: every 5 minutes)
+   * Computes maximum rain probability for the next N hours
    */
-  startPolling(intervalMs = 300000, onUpdateCallback = null) {
+  getLookaheadRainProb(nHours = 3) {
+    const hours = Math.max(1, Math.min(12, Number(nHours) || 3));
+    const slice = this.forecast.hourlyProbabilities.slice(0, hours);
+    return Math.max(...slice, 0);
+  }
+
+  /**
+   * Starts periodic polling (default: every 3 minutes)
+   */
+  startPolling(intervalMs = 180000, onUpdateCallback = null) {
     this.fetchWeather().then((data) => {
       if (onUpdateCallback) onUpdateCallback(data);
     });

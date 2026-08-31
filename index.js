@@ -29,7 +29,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
     server: 'Automated Smart Clothesline Backend',
-    version: '2.0.0',
+    version: '2.1.0',
     uptime: Math.floor(process.uptime()),
     device: deviceManager.getSnapshot(),
   });
@@ -44,6 +44,17 @@ app.get('/api/status', (req, res) => {
 app.get('/api/weather', async (req, res) => {
   const forecast = await weatherService.fetchWeather();
   res.json(forecast);
+});
+
+// Settings Configuration Endpoint
+app.post('/api/settings', (req, res) => {
+  const { motorSpeed, lookaheadHours, rainThreshold } = req.body;
+  const updatedSettings = deviceManager.updateSettings({ motorSpeed, lookaheadHours, rainThreshold });
+  res.json({
+    success: true,
+    settings: updatedSettings,
+    state: deviceManager.getSnapshot(),
+  });
 });
 
 // Mode Selector Endpoint (AUTOMATIC / MANUAL)
@@ -78,12 +89,12 @@ app.post('/api/override', (req, res) => {
 
 // Clothesline Control Endpoint (OPEN / CLOSE / STOP)
 app.post('/api/clothesline', (req, res) => {
-  const { action } = req.body;
+  const { action, speed } = req.body;
   if (!action || (action !== 'open' && action !== 'close' && action !== 'stop')) {
     return res.status(400).json({ error: 'Invalid or missing field "action". Must be "open", "close", or "stop".' });
   }
 
-  const result = deviceManager.executeClotheslineAction(action, 'Manual API Command');
+  const result = deviceManager.executeClotheslineAction(action, 'Manual API Command', speed);
   res.json({
     success: result.success,
     action,
@@ -146,11 +157,11 @@ server.on('upgrade', (request, socket, head) => {
   const time = new Date().toLocaleTimeString();
   console.log(`[${time}] 🔌 [WS UPGRADE REQUEST] Path: ${urlPath}`);
 
-  if (urlPath.includes('/device')) {
+  if (urlPath.includes('device')) {
     wssDevice.handleUpgrade(request, socket, head, (ws) => {
       wssDevice.emit('connection', ws, request);
     });
-  } else if (urlPath.includes('/client') || urlPath.startsWith('/ws')) {
+  } else if (urlPath.includes('client') || urlPath.includes('ws')) {
     wssClient.handleUpgrade(request, socket, head, (ws) => {
       wssClient.emit('connection', ws, request);
     });

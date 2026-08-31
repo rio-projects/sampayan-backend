@@ -1,6 +1,6 @@
 /**
  * Automated Smart Clothesline Device & System Manager
- * Manages real-time state, weather automation, operating modes, and WebSocket connections.
+ * Manages real-time state, weather automation, operating modes, settings, and WebSocket connections.
  */
 
 const weatherService = require('./weatherService');
@@ -16,12 +16,19 @@ class DeviceManager {
       clotheslinePosition: 'open', // 'open' | 'closed' | 'partial'
       motorStatus: 'idle',        // 'idle' | 'extending' | 'retracting' | 'stopped'
       direction: 'stop',          // 'c' (open/extend) | 'cc' (close/retract) | 'stop'
-      speed: 0,
+      speed: 255,
       buzzer: false,
       
       // Control Modes & Safety Overrides
       systemMode: 'auto',         // 'auto' | 'manual'
       rainSafetyOverride: true,   // true | false
+
+      // Settings Configuration
+      settings: {
+        motorSpeed: 255,          // 0 to 255 PWM
+        lookaheadHours: 3,        // Lookahead window N hours (1 to 12)
+        rainThreshold: 10,        // Rain probability threshold % (e.g., 10%)
+      },
       
       // Sensor & Hardware Telemetry
       rainSensor: false,          // false (dry) | true (rain)
@@ -30,9 +37,10 @@ class DeviceManager {
       lastSeen: null,
       ip: null,
       
-      // Weather Forecast Snapshot
+      // Weather Forecast Snapshot & Lookahead
       weatherForecast: {
         rainProbability: 0,
+        lookaheadRainProbability: 0,
         isRaining: false,
         condition: 'Clear Sky',
         temperature: 28,
@@ -54,48 +62,94 @@ class DeviceManager {
    */
   initWeatherEngine() {
     weatherService.startPolling(180000, (forecast) => { // Poll every 3 minutes
-      this.deviceState.weatherForecast = forecast;
+      this.updateWeatherForecastState(forecast);
       this.evaluateAutomatedRules('weather_update');
       this.broadcastStateToClients();
     });
   }
 
   /**
+   * Updates cached weather forecast state including N-hour lookahead computation
+   */
+  updateWeatherForecastState(forecast) {
+    const lookaheadHours = this.deviceState.settings.lookaheadHours;
+    const maxLookaheadProb = weatherService.getLookaheadRainProb(lookaheadHours);
+
+    this.deviceState.weatherForecast = {
+      ...forecast,
+      lookaheadRainProbability: maxLookaheadProb,
+    };
+  }
+
+  /**
    * Evaluates control priority rules for Smart Clothesline Automation:
    * 1. Rain Safety Override (If ON & Rain Detected -> Force CLOSE even in Manual Mode)
-   * 2. Automatic Mode Rules (If AUTO & High Rain Prob / Active Rain -> CLOSE; Else -> OPEN)
+   * 2. Automatic Mode Rules:
+   *    - Retract / Close if rain detected OR rain probability >= rainThreshold within next N hours
+   *    - Open if dry weather AND rain probability < rainThreshold for next N hours
    * 3. Manual Mode Rules (Respect manual user commands)
    */
   evaluateAutomatedRules(triggerReason = 'periodic') {
-    const { systemMode, rainSafetyOverride, weatherForecast, rainSensor, clotheslinePosition } = this.deviceState;
+    const { systemMode, rainSafetyOverride, weatherForecast, rainSensor, clotheslinePosition, settings } = this.deviceState;
+    
+    // N-Hour Lookahead Rain Evaluation
+    const lookaheadRainProb = weatherService.getLookaheadRainProb(settings.lookaheadHours);
+    this.deviceState.weatherForecast.lookaheadRainProbability = lookaheadRainProb;
+
     const isRainDetected = rainSensor || weatherForecast.isRaining;
-    const isHighRainRisk = weatherForecast.rainProbability >= 60;
+    const isRainRiskInNextNHours = lookaheadRainProb >= settings.rainThreshold;
 
     const time = new Date().toLocaleTimeString();
 
     // Rule 1: Rain Safety Override (Active during Manual Mode if enabled)
-    if (systemMode === 'manual' && rainSafetyOverride && isRainDetected) {
+    if (systemMode === 'manual' && rainSafetyOverride && (isRainDetected || isRainRiskInNextNHours)) {
       if (clotheslinePosition !== 'closed') {
-        console.log(`[${time}] 🌧️ [RAIN OVERRIDE] Rain detected in Manual Mode! Auto-retracting clothesline...`);
-        this.executeClotheslineAction('close', 'Rain Safety Override Active');
+        console.log(`[${time}] 🌧️ [RAIN OVERRIDE] Rain risk (${lookaheadRainProb}% in next ${settings.lookaheadHours}h)! Auto-retracting clothesline...`);
+        this.executeClotheslineAction('close', `Rain Safety Override (${lookaheadRainProb}% rain in ${settings.lookaheadHours}h)`);
       }
       return;
     }
 
     // Rule 2: Automatic Mode Decision Engine
     if (systemMode === 'auto') {
-      if (isRainDetected || isHighRainRisk) {
+      if (isRainDetected || isRainRiskInNextNHours) {
         if (clotheslinePosition !== 'closed') {
-          console.log(`[${time}] 🌧️ [AUTO MODE] Rain detected or High Rain Risk (${weatherForecast.rainProbability}%). Retracting clothesline...`);
-          this.executeClotheslineAction('close', `Auto Rain Protection (${weatherForecast.condition})`);
+          console.log(`[${time}] 🌧️ [AUTO MODE] Rain risk detected (${lookaheadRainProb}% in next ${settings.lookaheadHours}h, threshold: ${settings.rainThreshold}%). Retracting clothesline...`);
+          this.executeClotheslineAction('close', `Auto Protection (${lookaheadRainProb}% rain next ${settings.lookaheadHours}h)`);
         }
       } else {
         if (clotheslinePosition !== 'open') {
-          console.log(`[${time}] ☀️ [AUTO MODE] Weather safe (${weatherForecast.condition}). Opening clothesline...`);
-          this.executeClotheslineAction('open', 'Auto Weather Safe');
+          console.log(`[${time}] ☀️ [AUTO MODE] Weather safe (<${settings.rainThreshold}% rain for next ${settings.lookaheadHours}h). Opening clothesline...`);
+          this.executeClotheslineAction('open', `Auto Safe (<${settings.rainThreshold}% rain next ${settings.lookaheadHours}h)`);
         }
       }
     }
+  }
+
+  /**
+   * Updates Settings Configuration
+   */
+  updateSettings({ motorSpeed, lookaheadHours, rainThreshold }) {
+    if (motorSpeed !== undefined) {
+      this.deviceState.settings.motorSpeed = Math.max(0, Math.min(255, Number(motorSpeed)));
+      this.deviceState.speed = this.deviceState.settings.motorSpeed;
+    }
+
+    if (lookaheadHours !== undefined) {
+      this.deviceState.settings.lookaheadHours = Math.max(1, Math.min(12, Number(lookaheadHours)));
+    }
+
+    if (rainThreshold !== undefined) {
+      this.deviceState.settings.rainThreshold = Math.max(0, Math.min(100, Number(rainThreshold)));
+    }
+
+    const time = new Date().toLocaleTimeString();
+    console.log(`[${time}] ⚙️  [SETTINGS UPDATED] Speed: ${this.deviceState.settings.motorSpeed} | Lookahead: ${this.deviceState.settings.lookaheadHours}h | Threshold: ${this.deviceState.settings.rainThreshold}%`);
+
+    // Re-evaluate rules immediately with new settings
+    this.evaluateAutomatedRules('settings_update');
+    this.broadcastStateToClients();
+    return this.deviceState.settings;
   }
 
   /**
@@ -133,20 +187,22 @@ class DeviceManager {
   /**
    * Executes high-level Clothesline Action ('open' | 'close' | 'stop')
    */
-  executeClotheslineAction(action, reason = 'User Command') {
+  executeClotheslineAction(action, reason = 'User Command', customSpeed = null) {
     let dir = 'stop';
     let speed = 0;
     let newPos = this.deviceState.clotheslinePosition;
     let newMotorStatus = 'idle';
 
+    const targetSpeed = customSpeed !== null ? Number(customSpeed) : this.deviceState.settings.motorSpeed;
+
     if (action === 'open') {
       dir = 'c';
-      speed = 255;
+      speed = targetSpeed;
       newPos = 'open';
       newMotorStatus = 'extending';
     } else if (action === 'close') {
       dir = 'cc';
-      speed = 255;
+      speed = targetSpeed;
       newPos = 'closed';
       newMotorStatus = 'retracting';
     } else if (action === 'stop') {
@@ -184,7 +240,7 @@ class DeviceManager {
     let action = 'stop';
     if (direction === 'c') action = 'open';
     if (direction === 'cc') action = 'close';
-    return this.executeClotheslineAction(action, 'Direct Motor API');
+    return this.executeClotheslineAction(action, 'Direct Motor API', speed);
   }
 
   /**
