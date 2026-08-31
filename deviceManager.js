@@ -349,6 +349,11 @@ class DeviceManager {
       }
     }
 
+    const requestedSpeed = customSpeed !== null ? Number(customSpeed) : this.deviceState.settings.motorSpeed;
+    const movementSpeed = Number.isFinite(requestedSpeed) && requestedSpeed > 0
+      ? Math.max(25, Math.min(255, requestedSpeed))
+      : this.deviceState.settings.motorSpeed;
+
     let durationSeconds = 1.8;
     if (actUpper === 'OPEN') {
       durationSeconds = this.deviceState.settings.openDurationSeconds || 1.8;
@@ -358,7 +363,7 @@ class DeviceManager {
 
     const result = motorControlManager.requestMotorCommand({
       action: actUpper,
-      speed: customSpeed !== null ? Number(customSpeed) : this.deviceState.settings.motorSpeed,
+      speed: actUpper === 'STOP' ? 0 : movementSpeed,
       duration: durationSeconds,
       source: source,
       reason: reason,
@@ -388,12 +393,19 @@ class DeviceManager {
     if (direction === 'cc') dir = 'COUNTER_CLOCKWISE';
     if (direction === 'stop') dir = 'STOP';
 
+    const requestedSpeed = Number(speed);
+    const movementSpeed = dir === 'STOP'
+      ? 0
+      : Number.isFinite(requestedSpeed) && requestedSpeed > 0
+        ? Math.max(25, Math.min(255, requestedSpeed))
+        : this.deviceState.settings.motorSpeed;
+
     let durationSeconds = 1.8;
     if (dir === 'COUNTER_CLOCKWISE') durationSeconds = this.deviceState.settings.closeDurationSeconds || 2.1;
 
     const result = motorControlManager.requestMotorCommand({
       targetDirection: dir,
-      speed: speed !== undefined ? Number(speed) : this.deviceState.settings.motorSpeed,
+      speed: movementSpeed,
       duration: durationSeconds,
       source: source,
       reason: reason,
