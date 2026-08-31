@@ -329,9 +329,10 @@ class DeviceManager {
    */
   executeClotheslineAction(action, reason = 'User Command', customSpeed = null, force = false, source = 'MANUAL') {
     const actUpper = (action || '').toUpperCase();
+    const shouldForce = force || source === 'MANUAL';
 
-    // Prevent continuous motor run if already in target position
-    if (!force && this.deviceState.motorState === 'IDLE') {
+    // Prevent continuous motor run if already in target position (only for automated triggers)
+    if (!shouldForce && this.deviceState.motorState === 'IDLE') {
       if (actUpper === 'OPEN' && this.deviceState.clotheslinePosition === 'open') {
         return { success: true, message: 'Clothesline is already fully open', state: this.deviceState };
       }
