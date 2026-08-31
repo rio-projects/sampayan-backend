@@ -140,15 +140,17 @@ wssClient.on('connection', (ws, req) => {
   deviceManager.addClientSocket(ws, req);
 });
 
-// Handle HTTP Upgrade requests to route WebSocket paths
+// Handle HTTP Upgrade requests to route WebSocket paths safely
 server.on('upgrade', (request, socket, head) => {
-  const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+  const urlPath = request.url || '';
+  const time = new Date().toLocaleTimeString();
+  console.log(`[${time}] 🔌 [WS UPGRADE REQUEST] Path: ${urlPath}`);
 
-  if (pathname === '/ws/device') {
+  if (urlPath.includes('/device')) {
     wssDevice.handleUpgrade(request, socket, head, (ws) => {
       wssDevice.emit('connection', ws, request);
     });
-  } else if (pathname === '/ws/client' || pathname === '/ws') {
+  } else if (urlPath.includes('/client') || urlPath.startsWith('/ws')) {
     wssClient.handleUpgrade(request, socket, head, (ws) => {
       wssClient.emit('connection', ws, request);
     });
