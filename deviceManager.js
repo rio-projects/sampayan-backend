@@ -274,7 +274,7 @@ class DeviceManager {
       this.motorTimer = null;
     }
 
-    // Automatically transition motorStatus to 'idle' and turn off buzzer after 6 seconds of movement
+    // Automatically transition motorStatus to 'idle' and turn off buzzer after 10 seconds of movement
     if (action === 'open' || action === 'close') {
       this.motorTimer = setTimeout(() => {
         this.deviceState.motorStatus = 'idle';
@@ -283,7 +283,7 @@ class DeviceManager {
         this.sendToDevice({ action: 'motor', dir: 'stop', speed: 0 });
         this.sendToDevice({ action: 'buzzer', state: false });
         this.broadcastStateToClients();
-      }, 6000); // 6-second travel time
+      }, 10000); // 10-second calibrated travel time
     }
 
     const payload = {
