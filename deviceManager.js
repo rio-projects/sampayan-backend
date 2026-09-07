@@ -37,8 +37,8 @@ class DeviceManager {
       // Settings Configuration
       settings: {
         motorSpeed: 255,             // 0 to 255 PWM (displayed as 25% - 100%)
-        openDurationSeconds: 5.0,    // Decimal 0.1s to 5.0s
-        closeDurationSeconds: 5.0,   // Decimal 0.1s to 5.0s
+        openDurationSeconds: 5.0,    // Decimal 0.1s to 20.0s
+        closeDurationSeconds: 5.0,   // Decimal 0.1s to 20.0s
         travelDurationSeconds: 10,   // Fallback motor travel duration in seconds
         directionMapping: 'NORMAL',  // 'NORMAL' (CW=Open, CCW=Close) | 'REVERSED' (CW=Close, CCW=Open)
         lookaheadHours: 3,           // Lookahead window N hours (1 to 12)
@@ -297,11 +297,11 @@ class DeviceManager {
     }
 
     if (openDurationSeconds !== undefined) {
-      this.deviceState.settings.openDurationSeconds = Math.max(0.1, Math.min(5.0, Number(openDurationSeconds)));
+      this.deviceState.settings.openDurationSeconds = Math.max(0.1, Math.min(20.0, Number(openDurationSeconds)));
     }
 
     if (closeDurationSeconds !== undefined) {
-      this.deviceState.settings.closeDurationSeconds = Math.max(0.1, Math.min(5.0, Number(closeDurationSeconds)));
+      this.deviceState.settings.closeDurationSeconds = Math.max(0.1, Math.min(20.0, Number(closeDurationSeconds)));
     }
 
     if (travelDurationSeconds !== undefined) {
