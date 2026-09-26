@@ -56,3 +56,23 @@ Standalone Node.js WebSocket & REST API Backend Service for managing ESP32 Smart
 ### WebSocket Endpoints
 * **`ws://<SERVER_HOST>:4000/ws/device`**: Dedicated WebSocket for ESP32 hardware client.
 * **`ws://<SERVER_HOST>:4000/ws/client`**: Real-time telemetry subscription endpoint for Web/Mobile apps.
+
+
+## AI rain risk settings
+
+AI risk uses the peak hourly precipitation probability within `lookaheadHours`
+(1–12 hours) and compares it with `rainThreshold` (0–100%). Equality meets the
+trigger. For example, a 15% peak exceeds a 10% trigger but stays below a 20%
+trigger; rain beyond the selected window does not trigger forecast risk.
+Active rainfall and PAGASA warnings can override the probability comparison.
+Humidity affects drying speed rather than independently triggering rain risk.
+
+The Gemini prompt and deterministic fallback share these rules. Contradictory
+Gemini decision fields fall back to deterministic advice. Cached analysis is
+invalidated by changed settings, weather, location, position, sensor state or
+PAGASA intelligence. Saving risk settings immediately recomputes deterministic
+advice before evaluating automation; subsequent AI analysis uses the new inputs.
+The displayed risk window includes its duration, peak probability and threshold.
+
+Deploy the updated `aiAnalysisService.js` and `deviceManager.js` to the VPS and
+restart the backend to apply this behavior. No ESP32 firmware update is required.

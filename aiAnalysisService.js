@@ -13,6 +13,7 @@ class AiAnalysisService {
   constructor() {
     this.cachedAnalysis = null;
     this.lastAnalyzedTime = 0;
+    this.cachedInputKey = null;
     this.cacheTtlMs = 5 * 60 * 1000; // Cache Gemini results for 5 minutes
     this.model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   }
@@ -46,8 +47,11 @@ class AiAnalysisService {
    */
   async analyze(weatherData = {}, deviceState = {}) {
     const now = Date.now();
-    // Return cached analysis if fresh
-    if (this.cachedAnalysis && (now - this.lastAnalyzedTime < this.cacheTtlMs)) {
+    const inputKey = JSON.stringify({ weatherData, settings: deviceState.settings,
+      location: deviceState.location, position: deviceState.clotheslinePosition,
+      rainSensor: deviceState.rainSensor, pagasa: pagasaService.getIntelligence() });
+    // Settings, forecast, location and sensor changes invalidate cached advice.
+    if (this.cachedAnalysis && this.cachedInputKey === inputKey && (now - this.lastAnalyzedTime < this.cacheTtlMs)) {
       return this.cachedAnalysis;
     }
 
@@ -56,6 +60,7 @@ class AiAnalysisService {
       try {
         const geminiResult = await this.analyzeWithGemini(aiClient, weatherData, deviceState);
         if (geminiResult) {
+          this.cachedInputKey = inputKey;
           this.cachedAnalysis = geminiResult;
           this.lastAnalyzedTime = now;
           return geminiResult;
@@ -67,9 +72,22 @@ class AiAnalysisService {
 
     // Fallback to deterministic heuristic engine
     const fallbackResult = this.analyzeHeuristic(weatherData, deviceState);
+    this.cachedInputKey = inputKey;
     this.cachedAnalysis = fallbackResult;
     this.lastAnalyzedTime = now;
     return fallbackResult;
+  }
+
+  getRiskWindow(weatherData, deviceState) {
+    const hours = Number(deviceState.settings?.lookaheadHours ?? 3);
+    const trigger = Number(deviceState.settings?.rainThreshold ?? 10);
+    const lookaheadHours = Number.isFinite(hours) ? Math.max(1, Math.min(12, Math.round(hours))) : 3;
+    const threshold = Number.isFinite(trigger) ? Math.max(0, Math.min(100, trigger)) : 10;
+    const probabilities = weatherData.hourlyProbabilities?.slice(0, lookaheadHours);
+    const lookaheadProb = probabilities?.length
+      ? Math.max(...probabilities)
+      : (weatherData.lookaheadRainProbability ?? weatherData.rainProbability ?? 0);
+    return { lookaheadHours, threshold, lookaheadProb };
   }
 
   /**
@@ -78,7 +96,7 @@ class AiAnalysisService {
   async analyzeWithGemini(aiClient, weatherData = {}, deviceState = {}) {
     const pagasa = pagasaService.getIntelligence();
     const rainProb = weatherData.rainProbability || 0;
-    const lookaheadProb = weatherData.lookaheadRainProbability || rainProb;
+    const { lookaheadHours, threshold, lookaheadProb } = this.getRiskWindow(weatherData, deviceState);
     const humidity = weatherData.humidity || 65;
     const temp = weatherData.temperature || 28;
     const isRaining = weatherData.isRaining || false;
@@ -87,12 +105,22 @@ class AiAnalysisService {
     const locName = weatherData.locationName || deviceState.location?.name || 'Manila, Philippines';
     const lat = weatherData.latitude || deviceState.location?.latitude || 14.5995;
     const lon = weatherData.longitude || deviceState.location?.longitude || 120.9842;
-    const lookaheadHours = deviceState.settings?.lookaheadHours || 3;
 
+    const policy = this.analyzeHeuristic(weatherData, deviceState);
     const prompt = `
 You are Sampayan AI, an expert Philippine meteorological and automated clothesline risk intelligence engine.
 Base your evaluation strictly on the live telemetry and location provided below. Do not invent ungrounded weather data or bulletins.
 Crucially, provide a deep, paragraph-by-paragraph technical analysis rather than concise bullet points or surface suggestions.
+
+REQUIRED DECISION POLICY:
+Evaluate forecast rain only within the configured ${lookaheadHours}-hour window.
+A peak probability >= ${threshold}% meets the user's rain trigger, including equality.
+Do not substitute fixed 40%/70% cutoffs or extend the window. Humidity affects drying speed, not the rain trigger.
+Active rain and PAGASA warnings override forecast thresholds.
+Use these exact decision fields and make all narrative recommendations agree:
+${JSON.stringify({ aiRiskLevel: policy.aiRiskLevel, laundryRecommendation: policy.laundryRecommendation,
+  automationCommand: policy.automationCommand, riskWindow: policy.riskWindow,
+  reassessmentTrigger: policy.reassessmentTrigger })}
 
 TELEMETRY & GEOLOCATION SNAPSHOT:
 - User Location: ${locName} (Coordinates: ${lat}° N, ${lon}° E)
@@ -100,7 +128,7 @@ TELEMETRY & GEOLOCATION SNAPSHOT:
 - Relative Humidity: ${humidity}%
 - Immediate Rain Probability: ${rainProb}%
 - Peak Rain Probability (${lookaheadHours}-hour window): ${lookaheadProb}%
-- Configured Rain Threshold: ${deviceState.settings?.rainThreshold || 10}%
+- Configured Rain Threshold: ${threshold}%
 - Hardware Rain Sensor: ${rainSensor ? 'WET / TRIGGERED' : 'DRY'}
 - Current Weather Condition: ${weatherData.condition || 'Unknown'}
 - Active Rain Falling: ${isRaining ? 'YES' : 'NO'}
@@ -143,9 +171,15 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
 
     if (response && response.text) {
       const parsed = JSON.parse(response.text.trim());
+      // Discard contradictory model decisions rather than expose unsafe advice.
+      if (parsed.aiRiskLevel !== policy.aiRiskLevel
+        || parsed.laundryRecommendation !== policy.laundryRecommendation
+        || parsed.automationCommand !== policy.automationCommand) return policy;
       console.log(`[GEMINI API SUCCESS] 🤖 Location: ${parsed.locationContext || locName} | Risk: ${parsed.aiRiskLevel}`);
       return {
         ...parsed,
+        riskWindow: policy.riskWindow,
+        reassessmentTrigger: policy.reassessmentTrigger,
         locationContext: parsed.locationContext || `${locName} (${Number(lat).toFixed(2)}°N, ${Number(lon).toFixed(2)}°E)`,
         confidencePercent: Math.max(0, Math.min(100, Number(parsed.confidencePercent) || 0)),
         evidence: Array.isArray(parsed.evidence) ? parsed.evidence.slice(0, 5) : [],
@@ -161,7 +195,7 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
    */
   analyzeHeuristic(weatherData = {}, deviceState = {}) {
     const rainProb = weatherData.rainProbability || 0;
-    const lookaheadProb = weatherData.lookaheadRainProbability || rainProb;
+    const { lookaheadHours, threshold, lookaheadProb } = this.getRiskWindow(weatherData, deviceState);
     const humidity = weatherData.humidity || 65;
     const temp = weatherData.temperature || 28;
     const isRaining = weatherData.isRaining || false;
@@ -171,8 +205,6 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
     const locName = weatherData.locationName || deviceState.location?.name || 'Manila, Philippines';
     const lat = weatherData.latitude || deviceState.location?.latitude || 14.5995;
     const lon = weatherData.longitude || deviceState.location?.longitude || 120.9842;
-    const lookaheadHours = deviceState.settings?.lookaheadHours || 3;
-    const threshold = deviceState.settings?.rainThreshold || 10;
 
     const locationContext = `${locName} (${Number(lat).toFixed(2)}°N, ${Number(lon).toFixed(2)}°E)`;
 
@@ -183,7 +215,7 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
     let impact = 'Optimal laundry drying conditions without moisture risk.';
     let action = 'KEEP_OPEN';
 
-    if (isRaining || rainSensor || rainProb >= 70 || lookaheadProb >= 70 || pagasa.riskLevel === 'CRITICAL') {
+    if (isRaining || rainSensor || pagasa.riskLevel === 'CRITICAL' || pagasa.primarySystem === 'TROPICAL_CYCLONE') {
       riskLevel = 'CRITICAL';
       recommendation = position === 'closed' ? 'KEEP_RETRACTED' : 'RETRACT_IMMEDIATELY';
       cause = isRaining || rainSensor
@@ -192,27 +224,27 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
       pattern = 'Imminent rain showers and high atmospheric humidity.';
       impact = 'High risk of outdoor laundry getting soaked and damaged.';
       action = 'Retract clothesline under roof cover immediately.';
-    } else if (rainProb >= 40 || lookaheadProb >= 40 || pagasa.riskLevel === 'HIGH') {
+    } else if (lookaheadProb >= threshold || pagasa.riskLevel === 'HIGH' || ['HABAGAT', 'ITCZ', 'LPA'].includes(pagasa.primarySystem)) {
       riskLevel = 'HIGH';
       recommendation = position === 'closed' ? 'KEEP_RETRACTED' : 'RETRACT_SOON';
       cause = pagasa.primarySystem !== 'NONE' ? pagasa.systemName : 'Elevated Rain Probability';
       pattern = 'Intermittent rain showers expected within lookahead timeframe.';
       impact = 'Slow drying and high risk of sudden rainfall on exposed clothes.';
-      action = 'Retract clothesline or remain on high alert.';
-    } else if (rainProb >= threshold || lookaheadProb >= threshold || humidity > 85 || pagasa.riskLevel === 'MODERATE') {
+      action = 'Retract clothesline or keep it under cover.';
+    } else if (pagasa.riskLevel === 'MODERATE') {
       riskLevel = 'MODERATE';
       recommendation = 'MONITOR';
-      cause = humidity > 85 ? 'High Ambient Humidity' : 'Moderate Rain Threshold Exceeded';
+      cause = 'Moderate PAGASA Advisory';
       pattern = 'Partly cloudy conditions with elevated moisture levels.';
       impact = 'Reduced evaporation speed; drying may take longer than usual.';
-      action = 'Keep clothesline open but monitor weather closely.';
+      action = position === 'closed' ? 'Keep the clothesline retracted pending advisory reassessment.' : 'Monitor the advisory before further movement.';
     } else {
       riskLevel = 'LOW';
       recommendation = position === 'closed' ? 'SAFE_TO_REOPEN' : 'SAFE_OUTSIDE';
       cause = 'Clear Sky & Low Rain Probability';
       pattern = 'Persistent dry conditions expected across the forecast window.';
       impact = 'Fast and thorough outdoor drying for all fabric types.';
-      action = 'Laundry can remain outside safely.';
+      action = position === 'closed' ? 'Open the clothesline when automatic reopening is enabled.' : 'Laundry can remain outside safely.';
     }
 
     const confidencePercent = isRaining || rainSensor
@@ -226,7 +258,7 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
 
     const dryingOutlookParagraph = `From a fabric protection standpoint, atmospheric moisture conditions currently offer a ${riskLevel === 'LOW' ? 'HIGHLY FAVORABLE' : riskLevel === 'MODERATE' ? 'MODERATE' : 'POOR / RISKY'} outdoor drying environment. ${impact} Heavy cottons and linens will experience ${humidity > 80 ? 'prolonged drying cycles due to high air moisture saturation' : 'rapid moisture evaporation under current sun and wind exposure'}. Keeping clothes outside during sudden precipitation could result in re-washing requirements.`;
 
-    const actionPlanParagraph = `Based on comprehensive risk synthesis, the recommended operational command is ${recommendation.replace('_', ' ')}. The motorized clothesline mechanism should ${action === 'KEEP_OPEN' ? 'remain fully extended outside' : 'retract under protective shelter immediately'}. Automated safety overrides remain active, and system state will automatically re-evaluate upon any physical rain sensor pulse, PAGASA bulletin update, or rain probability shift beyond ${threshold}%.`;
+    const actionPlanParagraph = `Based on comprehensive risk synthesis, the recommended operational command is ${recommendation.replace('_', ' ')}. ${action} Automated safety overrides remain active, and system state will automatically re-evaluate upon any physical rain sensor pulse, PAGASA bulletin update, or rain probability shift beyond ${threshold}%.`;
 
     const evidence = [
       `User Location: ${locName} (${Number(lat).toFixed(2)}°N, ${Number(lon).toFixed(2)}°E)`,
@@ -247,10 +279,10 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
       actionPlanParagraph,
       analysisSummary: `${cause} at ${locName}. Rain probability is ${rainProb}% now (peaking at ${lookaheadProb}% in ${lookaheadHours}h). Action: ${action}.`,
       weatherCause: cause,
-      riskWindow: `Next ${lookaheadHours} Hours`,
+      riskWindow: `Next ${lookaheadHours} hours: peak ${lookaheadProb}% vs ${threshold}% rain trigger (${lookaheadProb >= threshold ? 'met' : 'not met'}).`,
       expectedPattern: pattern,
       dryingOutlook: riskLevel === 'LOW'
-        ? `GOOD - ${humidity}% humidity at ${locName}`
+        ? `${humidity > 85 ? 'SLOW' : 'GOOD'} - ${humidity}% humidity at ${locName}`
         : riskLevel === 'MODERATE'
           ? `SLOW - ${humidity}% humidity and ${lookaheadProb}% peak rain risk`
           : `UNSAFE - ${lookaheadProb}% peak rain risk`,
@@ -258,9 +290,9 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
       evidence,
       recommendedAction: action,
       automationCommand: recommendation === 'SAFE_OUTSIDE' || recommendation === 'SAFE_TO_REOPEN'
-        ? 'KEEP_OPEN'
+        ? (position === 'closed' ? 'OPEN' : 'KEEP_OPEN')
         : recommendation === 'MONITOR' ? 'MONITOR' : 'CLOSE',
-      reassessmentTrigger: 'Reassess when rain probability, local rain sensor, or location changes.',
+      reassessmentTrigger: `Reassess when peak rain probability crosses ${threshold}% within the next ${lookaheadHours} hours, or settings, rain detection, PAGASA advisories or location change.`,
       source: 'Deterministic Heuristic Engine (Multi-Paragraph)',
       evaluatedAt: new Date().toISOString(),
     };

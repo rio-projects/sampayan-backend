@@ -349,6 +349,12 @@ class DeviceManager {
 
     this.addActivityLog('Settings Updated', `Speed: ${Math.round((this.deviceState.settings.motorSpeed / 255) * 100)}% | Open: ${this.deviceState.settings.openDurationSeconds}s | Close: ${this.deviceState.settings.closeDurationSeconds}s`, 'system');
 
+    // Replace stale AI advice before automation evaluates the new window/threshold.
+    if (lookaheadHours !== undefined || rainThreshold !== undefined || aiAnalysisEnabled !== undefined) {
+      this.deviceState.weatherForecast.lookaheadRainProbability = weatherService.getLookaheadRainProb(this.deviceState.settings.lookaheadHours);
+      this.deviceState.aiAnalysis = aiAnalysisService.analyzeHeuristic(this.deviceState.weatherForecast, this.deviceState);
+    }
+
     // Re-evaluate rules immediately with new settings
     this.evaluateAutomatedRules('settings_update');
     this.broadcastStateToClients();
