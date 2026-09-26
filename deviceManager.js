@@ -241,9 +241,12 @@ class DeviceManager {
 
     const isRainDetected = rainSensor || weatherForecast.isRaining;
     const isRainRiskInNextNHours = lookaheadRainProb >= settings.rainThreshold;
-    const isSeverePagasa = pagasaIntelligence.riskLevel === 'CRITICAL' || pagasaIntelligence.primarySystem === 'TROPICAL_CYCLONE';
-    const isHabagatOrRainSystem = pagasaIntelligence.primarySystem === 'HABAGAT' || pagasaIntelligence.primarySystem === 'ITCZ' || pagasaIntelligence.primarySystem === 'LPA';
-    const isAiCritical = aiAnalysis.aiRiskLevel === 'CRITICAL' || aiAnalysis.aiRiskLevel === 'HIGH';
+    const hasVerifiedPagasa = settings.pagasaEnabled && pagasaIntelligence.verified === true;
+    const isSeverePagasa = hasVerifiedPagasa && (pagasaIntelligence.riskLevel === 'CRITICAL' || pagasaIntelligence.primarySystem === 'TROPICAL_CYCLONE');
+    const isHabagatOrRainSystem = hasVerifiedPagasa && ['HABAGAT', 'ITCZ', 'LPA'].includes(pagasaIntelligence.primarySystem);
+    // Motor decisions always use current settings, never cached AI prose.
+    const currentRisk = aiAnalysisService.analyzeHeuristic(weatherForecast, this.deviceState);
+    const isAiCritical = currentRisk.aiRiskLevel === 'CRITICAL' || currentRisk.aiRiskLevel === 'HIGH';
 
     // Tier 1 & 2: Rain Safety Override / Severe Weather (Active during Manual & Auto)
     if ((systemMode === 'manual' && rainSafetyOverride && (isRainDetected || isRainRiskInNextNHours || isSeverePagasa)) || isSeverePagasa) {
@@ -265,7 +268,7 @@ class DeviceManager {
           let desc = `${lookaheadRainProb}% rain probability within ${settings.lookaheadHours} hours`;
           if (isRainDetected) desc = 'Rain detected by local sensor';
           else if (isHabagatOrRainSystem) desc = `PAGASA: ${pagasaIntelligence.systemName} active`;
-          else if (isAiCritical) desc = `AI Warning: ${aiAnalysis.expectedPattern}`;
+          else if (isAiCritical) desc = `Risk assessment: ${currentRisk.expectedPattern}`;
 
           this.executeClotheslineAction('close', `Auto Protection (${desc})`, null, false, 'AUTOMATION');
 
@@ -275,7 +278,7 @@ class DeviceManager {
         }
       } else {
         // Safe dry conditions
-        if (settings.autoReopen && clotheslinePosition !== 'open' && !isHabagatOrRainSystem && aiAnalysis.aiRiskLevel === 'LOW') {
+        if (settings.autoReopen && clotheslinePosition !== 'open' && !isHabagatOrRainSystem && currentRisk.aiRiskLevel === 'LOW') {
           const desc = `<${settings.rainThreshold}% rain expected for next ${settings.lookaheadHours} hours`;
           this.executeClotheslineAction('open', `Auto Reopen (${desc})`, null, false, 'AUTOMATION');
 

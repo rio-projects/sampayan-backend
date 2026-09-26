@@ -15,6 +15,8 @@
 class PagasaService {
   constructor() {
     this.currentIntelligence = {
+      verified: false,
+      source: 'Seasonal estimate (not an official PAGASA feed)',
       primarySystem: 'NONE', // 'HABAGAT' | 'AMIHAN' | 'ITCZ' | 'SHEAR_LINE' | 'LPA' | 'TROPICAL_CYCLONE' | 'EASTERLIES' | 'THUNDERSTORM' | 'NONE'
       systemName: 'None',
       riskLevel: 'LOW',       // 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL'
@@ -102,12 +104,14 @@ class PagasaService {
       }
 
       this.currentIntelligence = {
+        verified: false,
+        source: 'Seasonal estimate (not an official PAGASA feed)',
         primarySystem: system,
         systemName,
         riskLevel,
         patternDescription: pattern,
         status,
-        activeBulletins: bulletins,
+        activeBulletins: [], // Seasonal estimates are not official bulletins.
         lastUpdated: new Date().toISOString(),
       };
 

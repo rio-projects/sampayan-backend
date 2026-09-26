@@ -94,7 +94,12 @@ class AiAnalysisService {
    * Calls Google Gemini API (gemini-2.5-flash) with structured JSON schema output
    */
   async analyzeWithGemini(aiClient, weatherData = {}, deviceState = {}) {
-    const pagasa = pagasaService.getIntelligence();
+    const reportedPagasa = pagasaService.getIntelligence();
+    const pagasa = reportedPagasa.verified === true ? reportedPagasa : {
+      primarySystem: 'NONE', systemName: 'None', riskLevel: 'LOW',
+      status: 'No verified PAGASA advisory available',
+      patternDescription: 'Seasonal estimates are excluded from motor risk decisions.',
+    };
     const rainProb = weatherData.rainProbability || 0;
     const { lookaheadHours, threshold, lookaheadProb } = this.getRiskWindow(weatherData, deviceState);
     const humidity = weatherData.humidity || 65;
@@ -200,7 +205,12 @@ Return ONLY a valid JSON object following this EXACT schema. Make the 4 paragrap
     const temp = weatherData.temperature || 28;
     const isRaining = weatherData.isRaining || false;
     const rainSensor = deviceState.rainSensor || false;
-    const pagasa = pagasaService.getIntelligence();
+    const reportedPagasa = pagasaService.getIntelligence();
+    const pagasa = reportedPagasa.verified === true ? reportedPagasa : {
+      primarySystem: 'NONE', systemName: 'None', riskLevel: 'LOW',
+      status: 'No verified PAGASA advisory available',
+      patternDescription: 'Seasonal estimates are excluded from motor risk decisions.',
+    };
     const position = deviceState.clotheslinePosition || 'open';
     const locName = weatherData.locationName || deviceState.location?.name || 'Manila, Philippines';
     const lat = weatherData.latitude || deviceState.location?.latitude || 14.5995;
